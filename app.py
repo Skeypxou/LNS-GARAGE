@@ -2772,32 +2772,214 @@ def show_qrcode():
 def show_users():
     st.title("🔐 Multi-Utilisateurs")
     st.info("🚧 Ce module est prêt à être développé !")
+    import qrcode
+from PIL import Image
+import io
+
+# --- FONCTION : VUE MOBILE POUR LE CLIENT (QR CODE) ---
+def show_qr_dashboard(veh_id):
+    """Affichage ultra simplifié et mobile-friendly pour le client qui scanne le QR Code."""
+    st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🚗 LNS GARAGE PRO - Suivi Véhicule</h1>", unsafe_allow_html=True)
+    conn = get_connection()
+    
+    # Récupérer infos véhicule et client
+    df_veh = pd.read_sql_query(f"""
+        SELECT v.*, c.nom || ' ' || c.prenom as Client 
+        FROM vehicules v JOIN clients c ON v.client_id = c.id WHERE v.id = {veh_id}
+    """, conn)
+    
+    if df_veh.empty:
+        st.error("Véhicule introuvable.")
+        conn.close()
+        return
+        
+    veh_info = df_veh.iloc[0]
+    
+    st.markdown(f"<h3 style='text-align: center;'>{veh_info['Client']} - {veh_info['marque']} {veh_info['modele']} ({veh_info['immatriculation']})</h3>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # 1. Statut Atelier
+    st.subheader("🏭 Statut des Travaux")
+    df_or = pd.read_sql_query(f"""
+        SELECT o.statut, s.etape_actuelle, s.progression 
+        FROM ordres_reparation o 
+        LEFT JOIN suivi_atelier s ON o.id = s.or_id 
+        WHERE o.vehicule_id = {veh_id} AND o.statut != 'Terminé'
+        ORDER BY o.id DESC LIMIT 1
+    """, conn)
+    
+    if not df_or.empty:
+        or_data = df_or.iloc[0]
+        st.progress(int(or_data['progression']) / 100, text=f"Étape actuelle : {or_data['etape_actuelle']} ({or_data['statut']})")
+    else:
+        st.success("✅ Réparation Terminée ou Non commencée")
+        
+    # 2. Galerie Photos (Avant / Après)
+    st.subheader("📸 Photos de la Réparation")
+    df_photos = pd.read_sql_query(f"SELECT type_photo, chemin_fichier FROM photos WHERE vehicule_id = {veh_id}", conn)
+    
+    if not df_photos.empty:
+        for type_p in ["Avant réparation", "Pendant réparation", "Après réparation"]:
+            df_type = df_photos[df_photos['type_photo'] == type_p]
+            if not df_type.empty:
+                st.write(f"**{type_p} :**")
+                cols = st.columns(min(len(df_type), 3))
+                for i, row in df_type.iterrows():
+                    with cols[i % 3]:
+                        try: st.image(row['chemin_fichier'], use_column_width=True)
+                        except: st.warning("Image non trouvée")
+    else:
+        st.info("Aucune photo pour le moment.")
+        
+    # 3. Documents (Devis / Facture)
+    st.subheader("📄 Documents à télécharger")
+    df_devis = pd.read_sql_query(f"SELECT numero_devis, id FROM devis WHERE vehicule_id = {veh_id} ORDER BY id DESC LIMIT 1", conn)
+    
+    if not df_devis.empty:
+        st.info(f"Devis N° {df_devis.iloc[0]['numero_devis']} disponible. (Connectez-vous à l'ERP complet pour le télécharger)")
+        
+    st.markdown("---")
+    st.markdown("<p style='text-align: center; font-size: 12px; color: grey;'>LNS GARAGE PRO - Téléphone : [Votre Numéro]</p>", unsafe_allow_html=True)
+    
+    conn.close()
+
+
+# --- MODULE 19 : QR CODE (INTERFACE ERP) ---
+def show_qrcode():
+    st.title("📱 Génération de QR Code Client")
+    conn = get_connection()
+    
+    st.info("💡 Génère un QR Code unique pour chaque véhicule. Le client pourra scanner ce QR code avec son téléphone pour voir en temps réel l'avancement de ses travaux, les photos avant/après, et ses documents !")
+    
+    tab1, tab2 = st.tabs(["🔗 Créer un QR Code", "ℹ️ Comment ça marche ?"])
+    
+    with tab1:
+        # URL de l'application (à adapter selon où l'app est hébergée)
+        # En local c'est localhost, sur Streamlit Cloud c'est l'URL publique
+        default_url = "http://localhost:8501" 
+        app_base_url = st.text_input("URL de base de votre application *", value=default_url, help="Si déployé sur Streamlit Cloud, mettez l'URL publique (ex: https://lnsgarage.streamlit.app)")
+        
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom || ' ' || c.prenom as Client
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("Ajoutez d'abord un client et un véhicule !")
+        else:
+            veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['marque']} {row['modele']} ({row['Client']}) [VehID:{row['id']}]", axis=1).tolist()
+            veh_choice = st.selectbox("Choisir le véhicule pour le QR Code", veh_dict)
+            veh_id = int(veh_choice.split("[VehID:")[1].replace("]", ""))
+            
+            # Construire l'URL finale avec le paramètre
+            qr_url = f"{app_base_url}?veh_id={veh_id}"
+            
+            st.markdown("---")
+            st.subheader("🔗 URL de Suivi Générée")
+            st.code(qr_url, language="plaintext")
+            
+            # Générer l'image QR Code
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(qr_url)
+            qr.make(fit=True)
+            
+            img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Convertir PIL Image en bytes pour Streamlit
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            byte_im = buf.getvalue()
+            
+            # Afficher le QR Code
+            st.image(byte_im, caption=f"QR Code pour {df_vehicules[df_vehicules['id'] == veh_id]['immatriculation'].values[0]}")
+            
+            # Bouton de Téléchargement
+            st.download_button(
+                label="⬇️ Télécharger l'image QR Code (PNG)",
+                data=byte_im,
+                file_name=f"QRCode_Veh_{veh_id}.png",
+                mime="image/png"
+            )
+
+    with tab2:
+        st.subheader("📚 Guide d'utilisation")
+        st.markdown("""
+        **1. Comment ça marche ?**
+        - L'application crée un lien URL unique lié à l'ID du véhicule (ex: `?veh_id=3`).
+        - Ce lien est transformé en image QR Code.
+        - Quand le client scanne ce QR Code avec l'appareil photo de son smartphone, son navigateur s'ouvre sur ce lien.
+        
+        **2. Ce que le client voit :**
+        - L'application détecte qu'il arrive via un QR Code.
+        - Elle lui affiche une page **simplifiée et mobile-friendly** (sans le menu latéral complexe de l'ERP).
+        - Il peut voir : Le statut de l'atelier (Tôlerie, Peinture...), ses photos Avant/Après, et ses documents.
+        
+        **3. Important pour le déploiement :**
+        - Si tu testes sur ton PC, l'URL est `http://localhost:8501`. Le QR Code fonctionnera **si ton téléphone est connecté au même réseau Wi-Fi que ton PC**.
+        - Quand tu déploieras l'app sur **Streamlit Cloud**, change cette URL de base avec l'URL publique de ton app (ex: `https://mon-garage.streamlit.app`). Le QR Code fonctionnera alors pour **tout le monde dans le monde entier** !
+        """)
+
+    conn.close()
 
 
 # ==========================================
 # EXÉCUTION PRINCIPALE
 # ==========================================
 
-# Appeler la fonction du module choisi
-if module_name == "dashboard":
-    show_dashboard()
-elif module_name == "clients":
-    show_clients()
-elif module_name == "vehicules":
-    show_vehicules()
-elif module_name == "reception":
-    show_reception()
-elif module_name == "sinistres":
-    show_sinistres()
-elif module_name == "devis":
-    show_devis()
-elif module_name == "ordres":
-    show_ordres()
-elif module_name == "atelier":
-    show_atelier()
-elif module_name == "stock":
-    show_stock()
-elif module_name == "accessoires":
+# Vérifier si on accède via un QR Code (Paramètre URL)
+query_params = st.query_params
+
+if "veh_id" in query_params:
+    # MODE MOBILE : Affichage direct pour le client qui a scanné le QR Code
+    show_qr_dashboard(int(query_params["veh_id"]))
+else:
+    # MODE ERP NORMAL : Menu latéral pour le garage
+    # Appeler la fonction du module choisi
+    if module_name == "dashboard":
+        show_dashboard()
+    elif module_name == "clients":
+        show_clients()
+    elif module_name == "vehicules":
+        show_vehicules()
+    elif module_name == "reception":
+        show_reception()
+    elif module_name == "sinistres":
+        show_sinistres()
+    elif module_name == "devis":
+        show_devis()
+    elif module_name == "ordres":
+        show_ordres()
+    elif module_name == "atelier":
+        show_atelier()
+    elif module_name == "stock":
+        show_stock()
+    elif module_name == "accessoires":
+        show_accessoires()
+    elif module_name == "fournisseurs":
+        show_fournisseurs()
+    elif module_name == "achats":
+        show_achats()
+    elif module_name == "facturation":
+        show_facturation()
+    elif module_name == "caisse":
+        show_caisse()
+    elif module_name == "photos":
+        show_photos()
+    elif module_name == "employes":
+        show_employes()
+    elif module_name == "documents":
+        show_documents()
+    elif module_name == "statistiques":
+        show_statistiques()
+    elif module_name == "qrcode":
+        show_qrcode()
+    elif module_name == "users":
+        show_users()
     show_accessoires()
 elif module_name == "fournisseurs":
     show_fournisseurs()
