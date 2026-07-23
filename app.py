@@ -14,6 +14,7 @@ from reportlab.lib.units import mm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
+import qrcode
 
 # --- 1. CONFIGURATION DE LA PAGE ---
 st.set_page_config(
