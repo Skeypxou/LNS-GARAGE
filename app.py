@@ -237,6 +237,20 @@ def update_db_schema():
             FOREIGN KEY(fournisseur_id) REFERENCES fournisseurs(id)
         )
     """)
+        # 5. Créer la table sinistres si elle n'existe pas
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sinistres (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicule_id INTEGER,
+            compagnie TEXT,
+            numero_dossier TEXT,
+            expert TEXT,
+            date_expertise DATE,
+            montant_valide REAL,
+            commentaires TEXT,
+            FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+        )
+    """)
         
     conn.commit()
     conn.close()
@@ -630,9 +644,118 @@ def show_reception():
             
     conn.close()
 
+# --- MODULE 5 : SINISTRES ASSURANCE ---
 def show_sinistres():
-    st.title("🛡️ Sinistres Assurance")
-    st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 5 : Sinistres.")
+    st.title("🛡️ Sinistres & Assurances")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Sinistres", "➕ Nouveau Sinistre", "🔍 Détails / Modifier"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        query = f"""
+            SELECT s.id, s.numero_dossier, s.compagnie, v.immatriculation, 
+                   c.nom || ' ' || c.prenom as Client, s.date_expertise, s.montant_valide
+            FROM sinistres s
+            JOIN vehicules v ON s.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+            ORDER BY s.date_expertise DESC
+        """
+        df = pd.read_sql_query(query, conn)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun sinistre d'assurance enregistré.")
+
+    # --- TAB 2 : AJOUTER ---
+    with tab2:
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom || ' ' || c.prenom as Client
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("⚠️ Vous devez ajouter un client et un véhicule avant de créer un sinistre !")
+        else:
+            veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['Client']} [VehID:{row['id']}]", axis=1).tolist()
+            
+            with st.form("new_sinistre"):
+                st.subheader("🆕 Ouverture de Dossier Sinistre")
+                veh_choice = st.selectbox("Véhicule concerné *", veh_dict)
+                veh_id = int(veh_choice.split("[VehID:")[1].replace("]", ""))
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    compagnie = st.text_input("Compagnie d'assurance * (ex: MAIF, AXA)")
+                    numero_dossier = st.text_input("N° Dossier Assurance *")
+                    expert = st.text_input("Nom de l'Expert mandateur")
+                with col2:
+                    date_expertise = st.date_input("Date de l'expertise prévue *")
+                    montant_valide = st.number_input("Montant validé par l'expert (€)", min_value=0.0, format="%.2f")
+                    
+                commentaires = st.text_area("Commentaires / Observations de l'expert")
+                
+                submitted = st.form_submit_button("🛡️ Créer le Sinistre")
+                if submitted:
+                    if compagnie and numero_dossier and date_expertise:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO sinistres (vehicule_id, compagnie, numero_dossier, expert, date_expertise, montant_valide, commentaires)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (veh_id, compagnie, numero_dossier, expert, str(date_expertise), montant_valide, commentaires))
+                        conn.commit()
+                        st.success(f"✅ Dossier sinistre {numero_dossier} créé avec succès !")
+                    else:
+                        st.error("❌ La Compagnie, le N° Dossier et la Date sont obligatoires.")
+
+    # --- TAB 3 : MODIFIER / SUPPRIMER ---
+    with tab3:
+        df_sin_list = pd.read_sql_query("""
+            SELECT s.id, s.numero_dossier, s.compagnie, v.immatriculation
+            FROM sinistres s JOIN vehicules v ON s.vehicule_id = v.id
+        """, conn)
+        
+        if df_sin_list.empty:
+            st.info("Aucun sinistre à modifier.")
+        else:
+            sin_dict = df_sin_list.apply(lambda row: f"{row['numero_dossier']} - {row['compagnie']} ({row['immatriculation']}) [SinID:{row['id']}]", axis=1).tolist()
+            sin_choice = st.selectbox("Choisir un sinistre", sin_dict)
+            sin_id = int(sin_choice.split("[SinID:")[1].replace("]", ""))
+            
+            df_detail = pd.read_sql_query(f"SELECT * FROM sinistres WHERE id={sin_id}", conn)
+            detail = df_detail.iloc[0]
+            
+            with st.form("modif_sinistre"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    m_compagnie = st.text_input("Compagnie *", value=detail['compagnie'])
+                    m_dossier = st.text_input("N° Dossier *", value=detail['numero_dossier'])
+                    m_expert = st.text_input("Expert", value=detail['expert'] if detail['expert'] else "")
+                with col2:
+                    m_date = st.date_input("Date expertise", value=pd.to_datetime(detail['date_expertise']))
+                    m_montant = st.number_input("Montant validé (€)", min_value=0.0, format="%.2f", value=float(detail['montant_valide']) if detail['montant_valide'] else 0.0)
+                
+                m_comments = st.text_area("Commentaires", value=detail['commentaires'] if detail['commentaires'] else "")
+                
+                save = st.form_submit_button("💾 Sauvegarder")
+                if save:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE sinistres SET compagnie=?, numero_dossier=?, expert=?, date_expertise=?, montant_valide=?, commentaires=? WHERE id=?
+                    """, (m_compagnie, m_dossier, m_expert, str(m_date), m_montant, m_comments, sin_id))
+                    conn.commit()
+                    st.success("✅ Sinistre mis à jour !")
+                    st.rerun()
+            
+            st.markdown("---")
+            if st.button(f"🗑️ Supprimer le sinistre {detail['numero_dossier']}"):
+                cursor = conn.cursor()
+                cursor.execute(f"DELETE FROM sinistres WHERE id={sin_id}")
+                conn.commit()
+                st.success("Sinistre supprimé !")
+                st.rerun()
+
+    conn.close()
 
 # --- FONCTION GÉNÉRATION PDF ---
 def generate_devis_pdf(devis_info, client_info, vehicule_info, details):
@@ -2371,9 +2494,109 @@ def show_documents():
     st.title("📂 Documents")
     st.info("🚧 Ce module est prêt à être développé !")
 
+# --- MODULE 18 : STATISTIQUES ---
 def show_statistiques():
-    st.title("📈 Statistiques")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("📈 Statistiques Générales - LNS GARAGE PRO")
+    conn = get_connection()
+    
+    st.markdown("---")
+    st.subheader("📊 Indicateurs Clés de Performance (KPI)")
+    
+    # Récupération des données globales
+    df_clients = pd.read_sql_query("SELECT COUNT(*) as count FROM clients", conn)
+    df_vehicules = pd.read_sql_query("SELECT COUNT(*) as count FROM vehicules", conn)
+    df_devis = pd.read_sql_query("SELECT COUNT(*) as count FROM devis", conn)
+    df_or_termine = pd.read_sql_query("SELECT COUNT(*) as count FROM ordres_reparation WHERE statut='Terminé'", conn)
+    
+    nb_clients = df_clients['count'].values[0]
+    nb_vehicules = df_vehicules['count'].values[0]
+    nb_devis = df_devis['count'].values[0]
+    nb_or_termine = df_or_termine['count'].values[0]
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(label="👥 Total Clients", value=nb_clients)
+    with col2:
+        st.metric(label="🚘 Total Véhicules", value=nb_vehicules)
+    with col3:
+        st.metric(label="📝 Devis Créés", value=nb_devis)
+    with col4:
+        st.metric(label="✅ Réparations Terminées", value=nb_or_termine)
+        
+    st.markdown("---")
+    st.subheader("💰 Analyse Financière")
+    
+    # CA Généré par les factures payées
+    df_ca_paye = pd.read_sql_query("SELECT SUM(montant_paye) as total FROM factures", conn)
+    ca_paye = df_ca_paye['total'].values[0] if df_ca_paye['total'].values[0] is not None else 0.0
+    
+    # CA Total Facturé (payé + impayés)
+    df_ca_total = pd.read_sql_query("""
+        SELECT SUM(d.total_ttc) as total 
+        FROM factures f JOIN devis d ON f.devis_id = d.id
+    """, conn)
+    ca_total = df_ca_total['total'].values[0] if df_ca_total['total'].values[0] is not None else 0.0
+    
+    # Factures impayées
+    df_impayes = pd.read_sql_query("""
+        SELECT SUM(d.total_ttc - f.montant_paye) as total 
+        FROM factures f JOIN devis d ON f.devis_id = d.id 
+        WHERE f.statut_paiement != 'Payée'
+    """, conn)
+    ca_impaye = df_impayes['total'].values[0] if df_impayes['total'].values[0] is not None else 0.0
+    
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        st.metric(label="📈 CA Total Facturé", value=f"{ca_total:.2f} €")
+    with col6:
+        st.metric(label="✅ CA Encaissé", value=f"{ca_paye:.2f} €")
+    with col7:
+        delta_color = "inverse" if ca_impaye > 0 else "normal"
+        st.metric(label="⚠️ Reste à Encaisser", value=f"{ca_impaye:.2f} €", delta=f"{ca_impaye:.2f} € impayés", delta_color=delta_color)
+
+    st.markdown("---")
+    st.subheader("📉 Graphiques d'Activité")
+    
+    col_graph1, col_graph2 = st.columns(2)
+    
+    with col_graph1:
+        # 1. Réparations par Marque de véhicule
+        df_marques = pd.read_sql_query("""
+            SELECT v.marque, COUNT(o.id) as count
+            FROM ordres_reparation o
+            JOIN vehicules v ON o.vehicule_id = v.id
+            GROUP BY v.marque
+            ORDER BY count DESC
+        """, conn)
+        if not df_marques.empty:
+            fig_marques = px.pie(df_marques, values='count', names='marque', title="Réparations par Marque", hole=0.4)
+            st.plotly_chart(fig_marques, use_container_width=True)
+        else:
+            st.info("Aucune réparation enregistrée pour afficher les marques.")
+            
+    with col_graph2:
+        # 2. Types de Dévis (Statuts)
+        df_devis_statut = pd.read_sql_query("""
+            SELECT statut, COUNT(id) as count FROM devis GROUP BY statut
+        """, conn)
+        if not df_devis_statut.empty:
+            fig_devis = px.bar(df_devis_statut, x='statut', y='count', title="Statut des Devis", color='statut')
+            st.plotly_chart(fig_devis, use_container_width=True)
+        else:
+            st.info("Aucun devis enregistré.")
+
+    st.markdown("---")
+    st.subheader("📦 Top Articles du Stock (Par Quantité)")
+    df_stock_top = pd.read_sql_query("""
+        SELECT designation, quantite FROM stock ORDER BY quantite DESC LIMIT 10
+    """, conn)
+    if not df_stock_top.empty:
+        fig_stock = px.bar(df_stock_top, x='designation', y='quantite', title="Top 10 Articles en Stock", color='quantite')
+        st.plotly_chart(fig_stock, use_container_width=True)
+    else:
+        st.info("Aucun article en stock.")
+
+    conn.close()
 
 def show_qrcode():
     st.title("📱 QR Code")
