@@ -2770,10 +2770,86 @@ def show_qrcode():
     st.title("📱 QR Code")
     st.info("🚧 Ce module est prêt à être développé !")
 
+# --- MODULE 20 : MULTI-UTILISATEURS ---
 def show_users():
-    st.title("🔐 Multi-Utilisateurs")
-    st.info("🚧 Ce module est prêt à être développé !")
-    import qrcode
+    st.title("🔐 Gestion des Utilisateurs & Permissions")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Utilisateurs", "➕ Ajouter un Utilisateur", "🔍 Modifier / Supprimer"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        df = pd.read_sql_query("SELECT id, nom, pseudo, role FROM utilisateurs ORDER BY nom", conn)
+        if not df.empty:
+            # Ne jamais afficher le mot de passe dans la liste !
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun utilisateur enregistré.")
+
+    # --- TAB 2 : AJOUTER ---
+    with tab2:
+        with st.form("add_user"):
+            st.subheader("🆕 Nouvel Utilisateur")
+            col1, col2 = st.columns(2)
+            with col1:
+                nom = st.text_input("Nom complet * (ex: Jean Tôlier)")
+                pseudo = st.text_input("Pseudo (Login) * (ex: jean.to)")
+            with col2:
+                mot_de_passe = st.text_input("Mot de passe *", type="password")
+                role = st.selectbox("Rôle / Permission *", ["Administrateur", "Réceptionniste", "Chef atelier", "Tôlier", "Peintre", "Comptable"])
+                
+            submitted = st.form_submit_button("✅ Créer le compte")
+            if submitted:
+                if nom and pseudo and mot_de_passe:
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute("""
+                            INSERT INTO utilisateurs (nom, pseudo, mot_de_passe, role)
+                            VALUES (?, ?, ?, ?)
+                        """, (nom, pseudo, mot_de_passe, role))
+                        conn.commit()
+                        st.success(f"✅ Compte '{pseudo}' créé avec succès ! Rôle : {role}")
+                    except sqlite3.IntegrityError:
+                        st.error("❌ Ce Pseudo (Login) existe déjà ! Choisis un autre.")
+                else:
+                    st.error("❌ Tous les champs sont obligatoires.")
+
+    # --- TAB 3 : MODIFIER / SUPPRIMER ---
+    with tab3:
+        df_users = pd.read_sql_query("SELECT id, nom, pseudo, role FROM utilisateurs", conn)
+        if not df_users.empty:
+            user_dict = df_users.apply(lambda row: f"{row['nom']} ({row['pseudo']}) - Rôle: {row['role']} [ID:{row['id']}]", axis=1).tolist()
+            user_choice = st.selectbox("Choisir un utilisateur", user_dict)
+            user_id = int(user_choice.split("[ID:")[1].replace("]", ""))
+            
+            df_detail = pd.read_sql_query(f"SELECT * FROM utilisateurs WHERE id={user_id}", conn)
+            detail = df_detail.iloc[0]
+            
+            with st.form("modif_user"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    m_nom = st.text_input("Nom *", value=detail['nom'])
+                    m_pseudo = st.text_input("Pseudo *", value=detail['pseudo'])
+                with col2:
+                    m_mdp = st.text_input("Nouveau Mot de passe (laisser vide si pas de changement)", type="password", value="")
+                    m_role = st.selectbox("Rôle *", ["Administrateur", "Réceptionniste", "Chef atelier", "Tôlier", "Peintre", "Comptable"], index=["Administrateur", "Réceptionniste", "Chef atelier", "Tôlier", "Peintre", "Comptable"].index(detail['role']))
+                
+                save = st.form_submit_button("💾 Sauvegarder")
+                if save:
+                    cursor = conn.cursor()
+                    # Si un nouveau mot de passe est fourni, on le met à jour, sinon on garde l'ancien
+                    if m_mdp:
+                        cursor.execute("UPDATE utilisateurs SET nom=?, pseudo=?, mot_de_passe=?, role=? WHERE id=?", (m_nom, m_pseudo, m_mdp, m_role, user_id))
+                    else:
+                        cursor.execute("UPDATE utilisateurs SET nom=?, pseudo=?, role=? WHERE id=?", (m_nom, m_pseudo, m_role, user_id))
+                    conn.commit()
+                    st.success("✅ Utilisateur modifié !")
+                    st.rerun()
+            
+            st.markdown("---")
+            if st.button(f"🗑️ Supprimer {detail['nom']}"):
+                cursor = conn.cursor
+import qrcode
 from PIL import Image
 import io
 
