@@ -2216,9 +2216,156 @@ def show_photos():
 
     conn.close()
 
+# --- MODULE 16 : EMPLOYÉS ---
 def show_employes():
-    st.title("👷 Employés")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("👷 Gestion des Employés & Productivité")
+    conn = get_connection()
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Liste des Employés", "➕ Ajouter un Employé", "🔍 Modifier / Supprimer", "📊 Productivité"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        df = pd.read_sql_query("SELECT id, nom, fonction, telephone, salaire FROM employes ORDER BY nom", conn)
+        if not df.empty:
+            # Formater le salaire pour l'affichage
+            df['Salaire (€)'] = df['salaire'].apply(lambda x: f"{x:.2f} €")
+            df_display = df[['nom', 'fonction', 'telephone', 'Salaire (€)']]
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun employé enregistré pour le moment.")
+
+    # --- TAB 2 : AJOUTER ---
+    with tab2:
+        with st.form("add_employe"):
+            st.subheader("🆕 Nouvel Employé")
+            col1, col2 = st.columns(2)
+            with col1:
+                nom = st.text_input("Nom complet * (ex: Jean Dupont)")
+                fonction = st.selectbox("Fonction / Rôle *", ["Chef d'atelier", "Tôlier", "Peintre", "Préparateur", "Réceptionniste", "Comptable"])
+            with col2:
+                telephone = st.text_input("Téléphone")
+                salaire = st.number_input("Salaire mensuel (€) *", min_value=0.0, format="%.2f")
+                
+            submitted = st.form_submit_button("✅ Ajouter l'employé")
+            if submitted:
+                if nom and fonction and salaire > 0:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO employes (nom, fonction, telephone, salaire)
+                        VALUES (?, ?, ?, ?)
+                    """, (nom, fonction, telephone, salaire))
+                    conn.commit()
+                    st.success(f"✅ Employé {nom} ajouté avec succès !")
+                else:
+                    st.error("❌ Le Nom, la Fonction et le Salaire sont obligatoires.")
+
+    # --- TAB 3 : MODIFIER / SUPPRIMER ---
+    with tab3:
+        df_emp_list = pd.read_sql_query("SELECT id, nom FROM employes", conn)
+        if df_emp_list.empty:
+            st.info("Aucun employé à modifier.")
+        else:
+            emp_dict = df_emp_list.apply(lambda row: f"{row['nom']} (ID: {row['id']})", axis=1).tolist()
+            emp_choice = st.selectbox("Choisir un employé", emp_dict)
+            emp_id = int(emp_choice.split("ID: ")[1].replace(")", ""))
+            
+            df_detail = pd.read_sql_query(f"SELECT * FROM employes WHERE id={emp_id}", conn)
+            detail = df_detail.iloc[0]
+            
+            with st.form("modif_employe"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    m_nom = st.text_input("Nom *", value=detail['nom'])
+                    m_fonction = st.selectbox("Fonction *", ["Chef d'atelier", "Tôlier", "Peintre", "Préparateur", "Réceptionniste", "Comptable"], index=["Chef d'atelier", "Tôlier", "Peintre", "Préparateur", "Réceptionniste", "Comptable"].index(detail['fonction']))
+                with col2:
+                    m_tel = st.text_input("Téléphone", value=detail['telephone'] if detail['telephone'] else "")
+                    m_salaire = st.number_input("Salaire (€) *", min_value=0.0, format="%.2f", value=float(detail['salaire']))
+                
+                save = st.form_submit_button("💾 Sauvegarder")
+                if save:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE employes SET nom=?, fonction=?, telephone=?, salaire=? WHERE id=?
+                    """, (m_nom, m_fonction, m_tel, m_salaire, emp_id))
+                    conn.commit()
+                    st.success("✅ Employé modifié !")
+                    st.rerun()
+            
+            st.markdown("---")
+            if st.button(f"🗑️ Supprimer {detail['nom']}"):
+                cursor = conn.cursor()
+                cursor.execute(f"DELETE FROM employes WHERE id={emp_id}")
+                conn.commit()
+                st.success("Employé supprimé !")
+                st.rerun()
+
+    # --- TAB 4 : PRODUCTIVITÉ ---
+    with tab4:
+        st.subheader("📊 Suivi des Performances par Employé")
+        st.info("💡 L'application relie automatiquement le nom de l'employé aux Ordres de Réparation (Module 7) pour calculer son chiffre d'affaires généré.")
+        
+        df_emp_perf = pd.read_sql_query("SELECT id, nom, fonction, salaire FROM employes", conn)
+        
+        if df_emp_perf.empty:
+            st.warning("Ajoutez des employés pour voir leurs statistiques.")
+        else:
+            # Calculer les stats pour chaque employé
+            stats_data = []
+            for index, emp in df_emp_perf.iterrows():
+                emp_nom = emp['nom']
+                
+                # Compter les OR terminés par cet employé
+                query_or_count = f"""
+                    SELECT COUNT(id) as total_or, SUM(total_ttc) as ca_genere
+                    FROM ordres_reparation o
+                    LEFT JOIN devis d ON o.devis_id = d.id
+                    WHERE o.responsable = '{emp_nom}' AND o.statut = 'Terminé'
+                """
+                df_stats = pd.read_sql_query(query_or_count, conn)
+                
+                total_or = df_stats['total_or'].values[0] if df_stats['total_or'].values[0] is not None else 0
+                ca_genere = df_stats['ca_genere'].values[0] if df_stats['ca_genere'].values[0] is not None else 0.0
+                
+                stats_data.append({
+                    'Nom': emp_nom,
+                    'Fonction': emp['fonction'],
+                    'Salaire': emp['salaire'],
+                    'OR Terminés': total_or,
+                    'CA Généré': ca_genere,
+                    'ROI (CA - Salaire)': ca_genere - emp['salaire']
+                })
+                
+            df_perf_display = pd.DataFrame(stats_data)
+            
+            # Afficher les KPI Globaux
+            total_salaire = df_perf_display['Salaire'].sum()
+            total_ca_team = df_perf_display['CA Généré'].sum()
+            roi_net = total_ca_team - total_salaire
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="💸 Total Salaires", value=f"{total_salaire:.2f} €")
+            with col2:
+                st.metric(label="📈 CA Généré par l'atelier", value=f"{total_ca_team:.2f} €")
+            with col3:
+                delta_color = "normal" if roi_net >= 0 else "inverse"
+                st.metric(label="💎 Rentabilité Atelier (CA - Salaires)", value=f"{roi_net:.2f} €", delta=f"{roi_net:.2f} €", delta_color=delta_color)
+                
+            st.markdown("---")
+            st.subheader("Détail par Employé")
+            st.dataframe(df_perf_display, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            st.subheader("🏆 Classement par Chiffre d'affaires Généré")
+            df_perf_sorted = df_perf_display.sort_values(by='CA Généré', ascending=False)
+            
+            fig_perf = px.bar(df_perf_sorted, x='Nom', y='CA Généré', 
+                              title="CA Généré par Employé (OR Terminés)",
+                              color='Fonction', text='CA Généré')
+            fig_perf.update_traces(texttemplate='%{text:.2f} €', textposition='outside')
+            st.plotly_chart(fig_perf, use_container_width=True)
+
+    conn.close()
 
 def show_documents():
     st.title("📂 Documents")
