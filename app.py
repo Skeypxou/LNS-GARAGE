@@ -823,9 +823,180 @@ def show_devis():
             
     conn.close()
 
+# --- MODULE 7 : ORDRES DE RÉPARATION ---
 def show_ordres():
-    st.title("🔧 Ordres de Réparation")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("🔧 Ordres de Réparation (OR)")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Ordres", "➕ Créer un Ordre", "🔍 Suivi / Modifier"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        # On joint les tables OR, Devis, Véhicules et Clients
+        query = """
+        SELECT o.numero_or, d.numero_devis, v.immatriculation, 
+               c.nom || ' ' || c.prenom as 'Client', 
+               o.responsable, o.statut, o.date_debut, o.date_fin
+        FROM ordres_reparation o
+        LEFT JOIN devis d ON o.devis_id = d.id
+        JOIN vehicules v ON o.vehicule_id = v.id
+        JOIN clients c ON v.client_id = c.id
+        ORDER BY o.date_debut DESC
+        """
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            # Ajouter des icônes visuelles pour les statuts
+            def statut_icon(val):
+                if val == "En attente": return "⏳ En attente"
+                elif val == "En cours": return "🔄 En cours"
+                elif val == "Suspendu": return "⏸️ Suspendu"
+                elif val == "Terminé": return "✅ Terminé"
+                else: return val
+                
+            df['statut'] = df['statut'].apply(statut_icon)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun ordre de réparation créé pour le moment.")
+
+    # --- TAB 2 : CRÉATION ---
+    with tab2:
+        # Récupérer les véhicules
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom, c.prenom 
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("⚠️ Vous devez ajouter un client et un véhicule avant de créer un OR !")
+        else:
+            # Récupérer les devis existants pour proposer la transformation Devis -> OR
+            df_devis = pd.read_sql_query("SELECT id, numero_devis, vehicule_id, statut, total_ttc FROM devis", conn)
+            
+            with st.form("new_or"):
+                st.subheader("Association Véhicule / Devis")
+                
+                # Sélection du véhicule
+                veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['marque']} {row['modele']} ({row['nom']} {row['prenom']}) [VehID:{row['id']}]", axis=1).tolist()
+                veh_choice = st.selectbox("Véhicule concerné", veh_dict)
+                veh_id = int(veh_choice.split("[VehID:")[1].replace("]", ""))
+                
+                # Sélection du devis (Optionnel mais recommandé)
+                # Filtrer les devis pour le véhicule sélectionné
+                df_devis_filtered = df_devis[df_devis['vehicule_id'] == veh_id]
+                
+                devis_options = ["Aucun devis (Travaux internes)"]
+                if not df_devis_filtered.empty:
+                    devis_dict_filtered = df_devis_filtered.apply(lambda row: f"{row['numero_devis']} - {row['statut']} ({row['total_ttc']}€) [DevisID:{row['id']}]", axis=1).tolist()
+                    devis_options.extend(devis_dict_filtered)
+                
+                devis_choice = st.selectbox("Associer à un Devis ?", devis_options)
+                
+                devis_id = None
+                if devis_choice != "Aucun devis (Travaux internes)":
+                    devis_id = int(devis_choice.split("[DevisID:")[1].replace("]", ""))
+                
+                st.markdown("---")
+                st.subheader("Planification du Travail")
+                
+                # Génération automatique du numéro OR
+                last_id_or = pd.read_sql_query("SELECT MAX(id) as max_id FROM ordres_reparation", conn)['max_id'].values[0]
+                if last_id_or is None: last_id_or = 0
+                default_numero_or = f"OR-{last_id_or+1:04d}"
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    numero_or = st.text_input("N° Ordre de Réparation *", value=default_numero_or)
+                    responsable = st.text_input("Responsable / Chef d'atelier *")
+                with col2:
+                    date_debut = st.date_input("Date de début prévue *")
+                with col3:
+                    date_fin = st.date_input("Date de fin prévue *")
+                    
+                statut = st.selectbox("Statut initial", ["En attente", "En cours", "Suspendu", "Terminé"])
+                
+                submitted = st.form_submit_button("🛠️ Créer l'Ordre de Réparation")
+                if submitted:
+                    if numero_or and responsable and date_debut and date_fin:
+                        # Vérifier que date_fin >= date_debut
+                        if str(date_fin) < str(date_debut):
+                            st.error("❌ La date de fin prévue doit être après la date de début !")
+                        else:
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                INSERT INTO ordres_reparation (devis_id, vehicule_id, numero_or, responsable, date_debut, date_fin, statut)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (devis_id, veh_id, numero_or, responsable, str(date_debut), str(date_fin), statut))
+                            conn.commit()
+                            st.success(f"✅ Ordre de Réparation {numero_or} créé avec succès !")
+                    else:
+                        st.error("❌ Le numéro, le responsable et les dates sont obligatoires.")
+
+    # --- TAB 3 : SUIVI / MODIFIER ---
+    with tab3:
+        df_ordres = pd.read_sql_query("""
+            SELECT o.id, o.numero_or, v.immatriculation, c.nom || ' ' || c.prenom as Client, o.statut
+            FROM ordres_reparation o
+            JOIN vehicules v ON o.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if not df_ordres.empty:
+            or_dict = df_ordres.apply(lambda row: f"{row['numero_or']} - {row['Client']} ({row['immatriculation']}) Statut: {row['statut']} [ORID:{row['id']}]", axis=1).tolist()
+            or_choice = st.selectbox("Choisir un Ordre de Réparation", or_dict)
+            or_id = int(or_choice.split("[ORID:")[1].replace("]", ""))
+            
+            # Récupérer les détails
+            df_detail = pd.read_sql_query(f"SELECT * FROM ordres_reparation WHERE id={or_id}", conn)
+            detail = df_detail.iloc[0]
+            
+            # Affichage visuel du statut
+            statut_color = {
+                "En attente": "🟡", "En cours": "🔵", "Suspendu": "🔴", "Terminé": "🟢"
+            }
+            current_color = statut_color.get(detail['statut'], "⚪")
+            
+            st.write(f"### {current_color} Ordre N° {detail['numero_or']}")
+            st.write(f"**Responsable :** {detail['responsable']} | **Période :** {detail['date_debut']} au {detail['date_fin']}")
+            
+            # Formulaire de mise à jour rapide (Statut et Dates)
+            with st.form("update_or"):
+                st.subheader("Mise à jour du Suivi")
+                new_statut = st.selectbox("Statut des travaux", 
+                                          ["En attente", "En cours", "Suspendu", "Terminé"], 
+                                          index=["En attente", "En cours", "Suspendu", "Terminé"].index(detail['statut']))
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_debut = st.date_input("Nouvelle date de début", value=pd.to_datetime(detail['date_debut']))
+                with col2:
+                    new_fin = st.date_input("Nouvelle date de fin prévue", value=pd.to_datetime(detail['date_fin']))
+                
+                new_resp = st.text_input("Responsable", value=detail['responsable'])
+                
+                save = st.form_submit_button("Sauvegarder les modifications")
+                if save:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE ordres_reparation SET statut=?, date_debut=?, date_fin=?, responsable=? WHERE id=?
+                    """, (new_statut, str(new_debut), str(new_fin), new_resp, or_id))
+                    conn.commit()
+                    st.success("Ordre de réparation mis à jour !")
+                    st.rerun()
+                    
+            # Bouton Supprimer
+            st.markdown("---")
+            if st.button("🗑️ Supprimer cet Ordre de Réparation"):
+                cursor = conn.cursor()
+                cursor.execute(f"DELETE FROM ordres_reparation WHERE id={or_id}")
+                conn.commit()
+                st.warning("Ordre supprimé !")
+                st.rerun()
+                
+        else:
+            st.info("Aucun ordre de réparation à suivre pour le moment.")
+            
+    conn.close()
 
 def show_atelier():
     st.title("🏭 Suivi Atelier")
