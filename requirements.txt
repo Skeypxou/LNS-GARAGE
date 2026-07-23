@@ -1,3 +1,6 @@
 streamlit
 pandas
-openpyxl
+plotly
+reportlab
+Pillow
+qrcode
