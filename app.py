@@ -195,12 +195,18 @@ def update_db_schema():
     cursor = conn.cursor()
     
     # 1. Ajouter 'details_json' à la table devis (nécessaire pour le Module 6)
-    cursor.execute("ALTER TABLE devis ADD COLUMN details_json TEXT")
+    cursor.execute("PRAGMA table_info(devis)")
+    devis_columns = [col[1] for col in cursor.fetchall()]
+    if 'details_json' not in devis_columns:
+        cursor.execute("ALTER TABLE devis ADD COLUMN details_json TEXT")
         
     # 2. Ajouter 'vehicule_id' à la table ordres_reparation (nécessaire pour le Module 7)
-    cursor.execute("ALTER TABLE ordres_reparation ADD COLUMN vehicule_id INTEGER")
+    cursor.execute("PRAGMA table_info(ordres_reparation)")
+    or_columns = [col[1] for col in cursor.fetchall()]
+    if 'vehicule_id' not in or_columns:
+        cursor.execute("ALTER TABLE ordres_reparation ADD COLUMN vehicule_id INTEGER")
         
-    # 3. Créer la table accessoires si elle n'existe pas
+    # 3. Créer la table accessoires si elle n'existe pas (CREATE IF NOT EXISTS est sûr)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accessoires (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -211,7 +217,7 @@ def update_db_schema():
             quantite INTEGER,
             seuil_alerte INTEGER DEFAULT 10
         )
-    """) # <-- Ici la parenthèse est bien fermée !
+    """)
     
     # 4. Créer la table achats si elle n'existe pas
     cursor.execute("""
@@ -230,7 +236,7 @@ def update_db_schema():
             notes TEXT,
             FOREIGN KEY(fournisseur_id) REFERENCES fournisseurs(id)
         )
-    """) # <-- Ici la parenthèse est bien fermée !
+    """)
         
     conn.commit()
     conn.close()
