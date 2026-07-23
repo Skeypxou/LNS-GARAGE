@@ -2044,9 +2044,177 @@ def show_caisse():
 
     conn.close()
 
+# --- MODULE 15 : GALERIE PHOTOS ---
+import time # Nécessaire pour générer des noms de fichiers uniques
+
 def show_photos():
-    st.title("📸 Galerie Photos")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("📸 Galerie Photos - Avant / Pendant / Après")
+    conn = get_connection()
+    
+    # S'assurer que le dossier photos existe
+    if not os.path.exists("photos"):
+        os.makedirs("photos")
+    
+    tab1, tab2, tab3 = st.tabs(["🖼️ Galerie Globale", "➕ Ajouter des Photos", "🔍 Galerie Véhicule"])
+    
+    # --- TAB 1 : GALERIE GLOBALE ---
+    with tab1:
+        filtre_type = st.selectbox("Filtrer par type", ["Tous", "Avant réparation", "Pendant réparation", "Après réparation"], key="filter_photo_type")
+        
+        base_query = f"""
+            SELECT p.id, v.immatriculation, p.type_photo, p.chemin_fichier, p.date_upload
+            FROM photos p
+            JOIN vehicules v ON p.vehicule_id = v.id
+        """
+        
+        if filtre_type != "Tous":
+            query = base_query + f" WHERE p.type_photo = '{filtre_type}' ORDER BY p.date_upload DESC"
+        else:
+            query = base_query + " ORDER BY p.date_upload DESC"
+            
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            # Affichage en grille (3 colonnes)
+            cols = st.columns(3)
+            for index, row in df.iterrows():
+                col_idx = index % 3
+                with cols[col_idx]:
+                    try:
+                        st.image(row['chemin_fichier'], caption=f"{row['immatriculation']} - {row['type_photo']} ({row['date_upload']})")
+                    except:
+                        st.error(f"Image introuvable : {row['chemin_fichier']}")
+        else:
+            st.info("Aucune photo dans la galerie pour le moment.")
+
+    # --- TAB 2 : AJOUTER DES PHOTOS ---
+    with tab2:
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom || ' ' || c.prenom as Client
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("⚠️ Vous devez ajouter un client et un véhicule avant d'importer des photos !")
+        else:
+            veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['marque']} {row['modele']} ({row['Client']}) [VehID:{row['id']}]", axis=1).tolist()
+            veh_choice = st.selectbox("Véhicule concerné *", veh_dict)
+            veh_id = int(veh_choice.split("[VehID:")[1].replace("]", ""))
+            
+            type_photo = st.selectbox("Type de photo *", ["Avant réparation", "Pendant réparation", "Après réparation"])
+            
+            # Upload multiple files
+            uploaded_files = st.file_uploader("Choisir des photos", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
+            
+            if uploaded_files:
+                st.warning(f"Vous avez sélectionné {len(uploaded_files)} photo(s). Cliquez sur le bouton ci-dessous pour les sauvegarder.")
+                
+                if st.button("💾 Sauvegarder les photos sur le serveur"):
+                    cursor = conn.cursor()
+                    count_saved = 0
+                    
+                    for uploaded_file in uploaded_files:
+                        # Générer un nom de fichier unique pour éviter les conflits (ex: immat_type_timestamp.jpg)
+                        timestamp = int(time.time())
+                        extension = uploaded_file.name.split('.')[-1]
+                        safe_immat = df_vehicules[df_vehicules['id'] == veh_id]['immatriculation'].values[0].replace(" ", "_")
+                        filename = f"{safe_immat}_{type_photo.split(' ')[0]}_{timestamp}_{count_saved}.{extension}"
+                        
+                        filepath = os.path.join("photos", filename)
+                        
+                        # Sauvegarder physiquement le fichier
+                        with open(filepath, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                            
+                        # Sauvegarder le chemin dans la DB
+                        cursor.execute("""
+                            INSERT INTO photos (vehicule_id, type_photo, chemin_fichier, date_upload)
+                            VALUES (?, ?, ?, DATE('now'))
+                        """, (veh_id, type_photo, filepath))
+                        
+                        count_saved += 1
+                        
+                    conn.commit()
+                    st.success(f"✅ {count_saved} photo(s) ajoutées avec succès dans la galerie !")
+
+    # --- TAB 3 : GALERIE VÉHICULE ---
+    with tab3:
+        df_veh_list = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, c.nom || ' ' || c.prenom as Client
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if not df_veh_list.empty:
+            veh_dict_detail = df_veh_list.apply(lambda row: f"{row['immatriculation']} ({row['Client']}) [VehID:{row['id']}]", axis=1).tolist()
+            veh_choice_detail = st.selectbox("Choisir un véhicule pour voir sa galerie", veh_dict_detail)
+            veh_id_detail = int(veh_choice_detail.split("[VehID:")[1].replace("]", ""))
+            
+            # Récupérer les photos de ce véhicule
+            df_veh_photos = pd.read_sql_query(f"""
+                SELECT id, type_photo, chemin_fichier, date_upload 
+                FROM photos WHERE vehicule_id = {veh_id_detail}
+            """, conn)
+            
+            if not df_veh_photos.empty:
+                st.subheader("🟢 Avant Réparation")
+                df_avant = df_veh_photos[df_veh_photos['type_photo'] == "Avant réparation"]
+                if not df_avant.empty:
+                    cols_avant = st.columns(min(len(df_avant), 3))
+                    for i, row in df_avant.iterrows():
+                        with cols_avant[i % 3]:
+                            try: st.image(row['chemin_fichier'])
+                            except: st.error("Image introuvable")
+                else:
+                    st.info("Aucune photo 'Avant' pour ce véhicule.")
+                    
+                st.subheader("🟡 Pendant Réparation")
+                df_pendant = df_veh_photos[df_veh_photos['type_photo'] == "Pendant réparation"]
+                if not df_pendant.empty:
+                    cols_pendant = st.columns(min(len(df_pendant), 3))
+                    for i, row in df_pendant.iterrows():
+                        with cols_pendant[i % 3]:
+                            try: st.image(row['chemin_fichier'])
+                            except: st.error("Image introuvable")
+                else:
+                    st.info("Aucune photo 'Pendant' pour ce véhicule.")
+                    
+                st.subheader("🔴 Après Réparation")
+                df_apres = df_veh_photos[df_veh_photos['type_photo'] == "Après réparation"]
+                if not df_apres.empty:
+                    cols_apres = st.columns(min(len(df_apres), 3))
+                    for i, row in df_apres.iterrows():
+                        with cols_apres[i % 3]:
+                            try: st.image(row['chemin_fichier'])
+                            except: st.error("Image introuvable")
+                else:
+                    st.info("Aucune photo 'Après' pour ce véhicule.")
+                    
+                # Option Suppression
+                st.markdown("---")
+                st.subheader("🗑️ Supprimer une photo")
+                photo_dict = df_veh_photos.apply(lambda row: f"{row['type_photo']} - {row['date_upload']} ({row['chemin_fichier']}) [PhotoID:{row['id']}]", axis=1).tolist()
+                photo_choice = st.selectbox("Photo à supprimer", photo_dict)
+                photo_id = int(photo_choice.split("[PhotoID:")[1].replace("]", ""))
+                
+                if st.button("Supprimer cette photo"):
+                    filepath_to_del = df_veh_photos[df_veh_photos['id'] == photo_id]['chemin_fichier'].values[0]
+                    
+                    # Supprimer le fichier physique
+                    if os.path.exists(filepath_to_del):
+                        os.remove(filepath_to_del)
+                        
+                    # Supprimer de la DB
+                    cursor = conn.cursor()
+                    cursor.execute(f"DELETE FROM photos WHERE id = {photo_id}")
+                    conn.commit()
+                    st.success("Photo supprimée avec succès !")
+                    st.rerun()
+            else:
+                st.info("Aucune photo enregistrée pour ce véhicule pour le moment.")
+        else:
+            st.info("Aucun véhicule enregistré.")
+
+    conn.close()
 
 def show_employes():
     st.title("👷 Employés")
