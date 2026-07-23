@@ -422,9 +422,156 @@ def show_vehicules():
 
 # --- MODULES EN ATTENTE (Placeholders) ---
 # Quand tu seras prêt, on remplira ces fonctions avec le code complet !
+# --- MODULE 4 : RÉCEPTION VÉHICULE ---
 def show_reception():
     st.title("📥 Réception Véhicule")
-    st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 4 : Réception.")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Réceptions", "➕ Nouvelle Réception", "🔍 Détails / Modifier"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        # On joint les tables pour afficher le véhicule et le client
+        query = """
+        SELECT r.id, v.immatriculation, v.marque, v.modele, 
+               c.nom || ' ' || c.prenom as 'Client', 
+               r.date_entree, r.observations
+        FROM reception r
+        JOIN vehicules v ON r.vehicule_id = v.id
+        JOIN clients c ON v.client_id = c.id
+        ORDER BY r.date_entree DESC
+        """
+        df = pd.read_sql_query(query, conn)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune réception enregistrée pour le moment.")
+
+    # --- TAB 2 : NOUVELLE RÉCEPTION ---
+    with tab2:
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom, c.prenom 
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("⚠️ Vous devez ajouter un client et un véhicule avant de faire une réception !")
+        else:
+            # Créer un menu déroulant pour choisir le véhicule
+            veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['marque']} {row['modele']} ({row['nom']} {row['prenom']}) [ID:{row['id']}]", axis=1).tolist()
+            veh_choice = st.selectbox("Véhicule reçu", veh_dict)
+            veh_id = int(veh_choice.split("[ID:")[1].replace("]", ""))
+            
+            with st.form("new_reception"):
+                st.subheader("🚗 Informations d'entrée")
+                col1, col2 = st.columns(2)
+                with col1:
+                    date_entree = st.date_input("Date d'entrée *")
+                    kilometrage = st.number_input("Kilométrage à l'entrée", min_value=0, step=1)
+                with col2:
+                    niveau_carburant = st.selectbox("Niveau carburant", ["Plein", "3/4", "1/2", "1/4", "Vide", "Inconnu"])
+                    
+                observations = st.text_area("Observations / Description du problème par le client")
+                
+                st.subheader("✅ Checklist Véhicule")
+                col3, col4, col5 = st.columns(3)
+                with col3:
+                    roue_secours = st.checkbox("Roue de secours")
+                    cric = st.checkbox("Cric")
+                with col4:
+                    radio = st.checkbox("Radio / Autoradio")
+                    documents = st.checkbox("Documents (CG, Assurance)")
+                with col5:
+                    clees = st.checkbox("Clés (doublon)")
+                    
+                st.subheader("✍️ Signature Client")
+                # Note: Pour une signature dessinée, il faudrait ajouter la librairie streamlit-drawable-canvas.
+                # Ici on utilise un checkbox + texte pour rester 100% compatible avec tes consignes initiales.
+                signature_check = st.checkbox("Le client confirme la remise du véhicule et la véracité de la checklist")
+                signature_nom = st.text_input("Nom et Prénom du signataire (si checkbox coché)")
+                
+                submitted = st.form_submit_button("📥 Enregistrer la Réception")
+                if submitted:
+                    if date_entree and signature_check and signature_nom:
+                        cursor = conn.cursor()
+                        # Les checkboxes renvoient True/False, SQLite préfère 1/0, on convertit avec int()
+                        cursor.execute("""
+                            INSERT INTO reception (vehicule_id, date_entree, kilometrage, niveau_carburant, observations, 
+                            roue_secours, cric, radio, documents, clees, signature_client)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (veh_id, str(date_entree), kilometrage, niveau_carburant, observations, 
+                              int(roue_secours), int(cric), int(radio), int(documents), int(clees), signature_nom))
+                        conn.commit()
+                        st.success("✅ Fiche de réception enregistrée avec succès !")
+                    else:
+                        st.error("❌ La date, la confirmation de signature et le nom du signataire sont obligatoires.")
+
+    # --- TAB 3 : DÉTAILS / MODIFIER ---
+    with tab3:
+        df_receptions = pd.read_sql_query("""
+            SELECT r.id, v.immatriculation, v.marque, c.nom || ' ' || c.prenom as Client, r.date_entree
+            FROM reception r
+            JOIN vehicules v ON r.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if not df_receptions.empty:
+            recep_dict = df_receptions.apply(lambda row: f"{row['date_entree']} - {row['immatriculation']} ({row['Client']}) [ID:{row['id']}]", axis=1).tolist()
+            recep_choice = st.selectbox("Choisir une fiche de réception", recep_dict)
+            recep_id = int(recep_choice.split("[ID:")[1].replace("]", ""))
+            
+            # Récupérer les détails
+            df_detail = pd.read_sql_query(f"SELECT * FROM reception WHERE id={recep_id}", conn)
+            detail = df_detail.iloc[0]
+            
+            # Afficher les détails proprement
+            st.write(f"**Véhicule ID:** {detail['vehicule_id']} | **Date entrée:** {detail['date_entree']}")
+            st.write(f"**Kilométrage:** {detail['kilometrage']} km | **Carburant:** {detail['niveau_carburant']}")
+            st.write(f"**Observations:** {detail['observations']}")
+            
+            st.markdown("---")
+            st.write("**Checklist :**")
+            checklist_items = {"Roue de secours": detail['roue_secours'], "Cric": detail['cric'], 
+                               "Radio": detail['radio'], "Documents": detail['documents'], "Clés": detail['clees']}
+            for item, val in checklist_items.items():
+                icon = "✅" if val else "❌"
+                st.write(f"{icon} {item}")
+                
+            st.write(f"**Signataire :** {detail['signature_client']}")
+            
+            # Option Modifier / Supprimer
+            with st.expander("🔧 Modifier ou Supprimer cette fiche"):
+                with st.form("modif_reception"):
+                    m_obs = st.text_area("Observations", value=detail['observations'])
+                    m_km = st.number_input("Kilométrage", value=int(detail['kilometrage']))
+                    
+                    m_roue = st.checkbox("Roue de secours", value=bool(detail['roue_secours']))
+                    m_cric = st.checkbox("Cric", value=bool(detail['cric']))
+                    m_radio = st.checkbox("Radio", value=bool(detail['radio']))
+                    m_docs = st.checkbox("Documents", value=bool(detail['documents']))
+                    m_clees = st.checkbox("Clés", value=bool(detail['clees']))
+                    
+                    save = st.form_submit_button("Sauvegarder modifications")
+                    if save:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE reception SET observations=?, kilometrage=?, roue_secours=?, cric=?, radio=?, documents=?, clees=?
+                            WHERE id=?
+                        """, (m_obs, m_km, int(m_roue), int(m_cric), int(m_radio), int(m_docs), int(m_clees), recep_id))
+                        conn.commit()
+                        st.success("Fiche modifiée !")
+                        st.rerun()
+                
+                if st.button("🗑️ Supprimer cette fiche de réception", type="secondary"):
+                    cursor = conn.cursor()
+                    cursor.execute(f"DELETE FROM reception WHERE id={recep_id}")
+                    conn.commit()
+                    st.warning("Fiche supprimée !")
+                    st.rerun()
+        else:
+            st.info("Aucune réception à modifier pour le moment.")
+            
+    conn.close()
 
 def show_sinistres():
     st.title("🛡️ Sinistres Assurance")
