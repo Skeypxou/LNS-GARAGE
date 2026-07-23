@@ -1451,9 +1451,14 @@ def show_fournisseurs():
     
     # --- TAB 1 : LISTE ---
     with tab1:
-        df = pd.read_sql_query("SELECT id, nom, telephone, email, adresse FROM fournisseurs ORDER BY nom", conn)
+        # Utilisation de f""" ... """ pour éviter les erreurs de syntaxe sur de longues requêtes
+        query = f"""
+            SELECT id, nom, telephone, email, adresse 
+            FROM fournisseurs 
+            ORDER BY nom
+        """
+        df = pd.read_sql_query(query, conn)
         if not df.empty:
-            # Masquer l'ID pour un affichage plus propre
             st.dataframe(df[['nom', 'telephone', 'email', 'adresse']], use_container_width=True, hide_index=True)
         else:
             st.info("Aucun fournisseur enregistré pour le moment.")
@@ -1485,16 +1490,65 @@ def show_fournisseurs():
 
     # --- TAB 3 : MODIFIER / SUPPRIMER ---
     with tab3:
-        df_fournisseurs = pd.read_sql_query("SELECT id, nom FROM fournisseurs", conn)
+        query_list = f"""
+            SELECT id, nom FROM fournisseurs
+        """
+        df_fournisseurs = pd.read_sql_query(query_list, conn)
+        
         if not df_fournisseurs.empty:
-            # Créer un menu déroulant pour choisir le fournisseur
-            fournisseur_dict = df_fournisseurs.apply(lambda row: f"{row['nom']} (ID: {row['id']})", axis=1).tolist()
+            fournisseur_dict = df_fournisseurs.apply(
+                lambda row: f"{row['nom']} (ID: {row['id']})", axis=1
+            ).tolist()
+            
             fournisseur_choice = st.selectbox("Choisir un fournisseur à modifier", fournisseur_dict)
+            # Extraction de l'ID plus sécurisée
             fournisseur_id = int(fournisseur_choice.split("ID: ")[1].replace(")", ""))
             
-            # Récupérer les données actuelles
-            df_detail = pd.read_sql_query(f"SELECT
-
+            # Requête avec f""" """
+            query_detail = f"""
+                SELECT * FROM fournisseurs 
+                WHERE id = {fournisseur_id}
+            """
+            df_detail = pd.read_sql_query(query_detail, conn)
+            fournisseur_data = df_detail.iloc[0]
+            
+            st.markdown("---")
+            with st.form("modif_fournisseur"):
+                st.subheader(f"Modifier : {fournisseur_data['nom']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    m_nom = st.text_input("Nom *", value=fournisseur_data['nom'])
+                    m_tel = st.text_input("Téléphone *", value=fournisseur_data['telephone'])
+                with col2:
+                    m_email = st.text_input("Email", value=fournisseur_data['email'] if fournisseur_data['email'] else "")
+                    m_adresse = st.text_area("Adresse", value=fournisseur_data['adresse'] if fournisseur_data['adresse'] else "")
+                
+                save = st.form_submit_button("💾 Sauvegarder les modifications")
+                if save:
+                    if m_nom and m_tel:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE fournisseurs SET nom=?, telephone=?, email=?, adresse=? WHERE id=?
+                        """, (m_nom, m_tel, m_email, m_adresse, fournisseur_id))
+                        conn.commit()
+                        st.success("✅ Fournisseur modifié avec succès !")
+                        st.rerun()
+                    else:
+                        st.error("❌ Le Nom et le Téléphone restent obligatoires.")
+            
+            st.markdown("---")
+            st.warning("⚠️ La suppression est définitive.")
+            if st.button(f"🗑️ Supprimer {fournisseur_data['nom']}"):
+                cursor = conn.cursor()
+                cursor.execute(f"DELETE FROM fournisseurs WHERE id={fournisseur_id}")
+                conn.commit()
+                st.success(f"Fournisseur '{fournisseur_data['nom']}' supprimé !")
+                st.rerun()
+                
+        else:
+            st.info("Veuillez ajouter des fournisseurs d'abord pour pouvoir les modifier.")
+            
+    conn.close()
 def show_achats():
     st.title("🛒 Achats")
     st.info("🚧 Ce module est prêt à être développé !")
