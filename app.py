@@ -1442,9 +1442,58 @@ def show_accessoires():
 
     conn.close()
 
+# --- MODULE 11 : FOURNISSEURS ---
 def show_fournisseurs():
-    st.title("🏭 Fournisseurs")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("🏭 Gestion des Fournisseurs")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Fournisseurs", "➕ Ajouter un Fournisseur", "🔍 Modifier / Supprimer"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        df = pd.read_sql_query("SELECT id, nom, telephone, email, adresse FROM fournisseurs ORDER BY nom", conn)
+        if not df.empty:
+            # Masquer l'ID pour un affichage plus propre
+            st.dataframe(df[['nom', 'telephone', 'email', 'adresse']], use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun fournisseur enregistré pour le moment.")
+
+    # --- TAB 2 : AJOUTER ---
+    with tab2:
+        with st.form("ajout_fournisseur"):
+            st.subheader("🆕 Nouveau Fournisseur")
+            col1, col2 = st.columns(2)
+            with col1:
+                nom = st.text_input("Nom de l'entreprise / Fournisseur *")
+                telephone = st.text_input("Téléphone *")
+            with col2:
+                email = st.text_input("Email")
+                adresse = st.text_area("Adresse")
+            
+            submitted = st.form_submit_button("Enregistrer le fournisseur")
+            if submitted:
+                if nom and telephone:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO fournisseurs (nom, telephone, email, adresse)
+                        VALUES (?, ?, ?, ?)
+                    """, (nom, telephone, email, adresse))
+                    conn.commit()
+                    st.success(f"✅ Fournisseur '{nom}' ajouté avec succès !")
+                else:
+                    st.error("❌ Le Nom et le Téléphone sont obligatoires.")
+
+    # --- TAB 3 : MODIFIER / SUPPRIMER ---
+    with tab3:
+        df_fournisseurs = pd.read_sql_query("SELECT id, nom FROM fournisseurs", conn)
+        if not df_fournisseurs.empty:
+            # Créer un menu déroulant pour choisir le fournisseur
+            fournisseur_dict = df_fournisseurs.apply(lambda row: f"{row['nom']} (ID: {row['id']})", axis=1).tolist()
+            fournisseur_choice = st.selectbox("Choisir un fournisseur à modifier", fournisseur_dict)
+            fournisseur_id = int(fournisseur_choice.split("ID: ")[1].replace(")", ""))
+            
+            # Récupérer les données actuelles
+            df_detail = pd.read_sql_query(f"SELECT
 
 def show_achats():
     st.title("🛒 Achats")
