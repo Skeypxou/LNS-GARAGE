@@ -775,7 +775,15 @@ def show_devis():
         if not df_devis.empty:
             devis_dict = df_devis.apply(lambda row: f"{row['numero_devis']} - {row['Client']} ({row['immatriculation']}) TTC: {row['total_ttc']}€ [ID:{row['id']}]", axis=1).tolist()
             devis_choice = st.selectbox("Choisir un devis", devis_dict)
-            devis_id = int(devis_choice.split("[ID:")[1].replace("]", ""))
+            devis_id =  # Table Devis (Module 6) - AJOUT DE details_json
+ cursor.execute("""
+ CREATE TABLE IF NOT EXISTS devis (
+     id INTEGER PRIMARY KEY AUTOINCREMENT, vehicule_id INTEGER, 
+     numero_devis TEXT, date_creation DATE, statut TEXT, 
+     total_pieces REAL, total_mo REAL, tva REAL, total_ttc REAL, 
+     details_json TEXT,
+     FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+ )""")
             
             # Récupération des données
             df_devis_detail = pd.read_sql_query(f"SELECT * FROM devis WHERE id={devis_id}", conn)
