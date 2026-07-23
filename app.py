@@ -216,7 +216,7 @@ def update_db_schema():
             quantite INTEGER,
             seuil_alerte INTEGER DEFAULT 10
         )
-    """
+    """)
     conn.commit()
     conn.close()
 # Initialiser la DB au lancement
