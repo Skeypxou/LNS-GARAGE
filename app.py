@@ -8,6 +8,12 @@ import sqlite3
 import pandas as pd
 import plotly.express as px
 import os
+import json
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 # --- 1. CONFIGURATION DE LA PAGE ---
 st.set_page_config(
