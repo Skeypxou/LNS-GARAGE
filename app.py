@@ -1721,9 +1721,185 @@ def show_achats():
 
     conn.close()
 
+# --- MODULE 13 : FACTURATION ---
 def show_facturation():
-    st.title("🧾 Facturation")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("🧾 Facturation & Paiements")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Factures", "➕ Transformer un Devis en Facture", "💰 Paiement & PDF"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        query = f"""
+            SELECT f.id, f.numero_facture, c.nom || ' ' || c.prenom as Client, 
+                   v.immatriculation, f.date_creation, f.statut_paiement, d.total_ttc, f.montant_paye
+            FROM factures f
+            JOIN devis d ON f.devis_id = d.id
+            JOIN vehicules v ON d.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+            ORDER BY f.date_creation DESC
+        """
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            def statut_paiement_icon(val):
+                if val == "Payée": return "🟢 Payée"
+                elif val == "Partiellement payée": return "🟡 Partielle"
+                elif val == "Impayée": return "🔴 Impayée"
+                else: return val
+                
+            df['statut_paiement'] = df['statut_paiement'].apply(statut_paiement_icon)
+            df['Reste à Payer'] = df['total_ttc'] - df['montant_paye']
+            
+            df_display = df[['numero_facture', 'Client', 'immatriculation', 'date_creation', 'statut_paiement', 'total_ttc', 'montant_paye', 'Reste à Payer']]
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune facture émise pour le moment.")
+
+    # --- TAB 2 : TRANSFORMATION DEVIS -> FACTURE ---
+    with tab2:
+        st.subheader("🔄 Transformer un Devis validé en Facture")
+        st.warning("⚠️ Seuls les devis avec le statut 'Validé' ou 'En attente' peuvent être facturés.")
+        
+        # Chercher les devis non encore facturés
+        query_devis_dispo = f"""
+            SELECT d.id, d.numero_devis, c.nom || ' ' || c.prenom as Client, v.immatriculation, d.statut, d.total_ttc
+            FROM devis d
+            JOIN vehicules v ON d.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+            WHERE d.id NOT IN (SELECT devis_id FROM factures WHERE devis_id IS NOT NULL)
+            AND d.statut IN ('Validé', 'En attente')
+        """
+        df_devis_dispo = pd.read_sql_query(query_devis_dispo, conn)
+        
+        if df_devis_dispo.empty:
+            st.info("🎉 Tous les devis validés ont déjà été facturés, ou aucun devis n'est validé.")
+        else:
+            devis_dict = df_devis_dispo.apply(
+                lambda row: f"{row['numero_devis']} - {row['Client']} ({row['immatriculation']}) TTC: {row['total_ttc']}€ [DevisID:{row['id']}]", axis=1
+            ).tolist()
+            
+            devis_choice = st.selectbox("Choisir le Devis à facturer", devis_dict)
+            devis_id = int(devis_choice.split("[DevisID:")[1].replace("]", ""))
+            
+            # Générer numéro facture auto
+            last_id_fac = pd.read_sql_query("SELECT MAX(id) as max_id FROM factures", conn)['max_id'].values[0]
+            if last_id_fac is None: last_id_fac = 0
+            default_numero_fac = f"FAC-{last_id_fac+1:04d}"
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                numero_facture = st.text_input("N° Facture *", value=default_numero_fac)
+            with col2:
+                date_facture = st.date_input("Date d'émission *")
+                
+            if st.button("🧾 Créer la Facture"):
+                if numero_facture and date_facture:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO factures (devis_id, numero_facture, date_creation, statut_paiement, montant_paye)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (devis_id, numero_facture, str(date_facture), "Impayée", 0.0))
+                    conn.commit()
+                    st.success(f"✅ Facture {numero_facture} créée avec succès ! Elle est actuellement Impayée.")
+                else:
+                    st.error("❌ Le numéro et la date sont obligatoires.")
+
+    # --- TAB 3 : PAIEMENT & PDF ---
+    with tab3:
+        query_factures = f"""
+            SELECT f.id, f.numero_facture, c.nom || ' ' || c.prenom as Client, f.statut_paiement, d.total_ttc, f.montant_paye
+            FROM factures f
+            JOIN devis d ON f.devis_id = d.id
+            JOIN vehicules v ON d.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+        """
+        df_factures = pd.read_sql_query(query_factures, conn)
+        
+        if df_factures.empty:
+            st.info("Aucune facture à gérer.")
+        else:
+            fac_dict = df_factures.apply(
+                lambda row: f"{row['numero_facture']} - {row['Client']} (Statut: {row['statut_paiement']}) [FacID:{row['id']}]", axis=1
+            ).tolist()
+            
+            fac_choice = st.selectbox("Choisir une Facture", fac_dict)
+            fac_id = int(fac_choice.split("[FacID:")[1].replace("]", ""))
+            
+            facture_data = df_factures[df_factures['id'] == fac_id].iloc[0]
+            total_ttc = facture_data['total_ttc']
+            montant_paye_actuel = facture_data['montant_paye']
+            reste_a_payer = total_ttc - montant_paye_actuel
+            
+            st.markdown("---")
+            st.subheader(f"💰 Gestion du Paiement : {facture_data['numero_facture']}")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total TTC", f"{total_ttc:.2f} €")
+            with col2:
+                st.metric("Montant Payé", f"{montant_paye_actuel:.2f} €")
+            with col3:
+                st.metric("Reste à Payer", f"{reste_a_payer:.2f} €", delta=f"-{reste_a_payer:.2f} €" if reste_a_payer > 0 else "0 €")
+            
+            # Enregistrer un paiement
+            with st.form("paiement_form"):
+                montant_paiement = st.number_input("Montant du paiement reçu (€)", min_value=0.0, format="%.2f")
+                submitted = st.form_submit_button("✅ Enregistrer le paiement")
+                
+                if submitted:
+                    if montant_paiement > 0:
+                        nouveau_montant_paye = montant_paye_actuel + montant_paiement
+                        
+                        # Déterminer le nouveau statut
+                        if nouveau_montant_paye >= total_ttc:
+                            nouveau_statut = "Payée"
+                            nouveau_montant_paye = total_ttc # On plafonne si le client paie trop
+                        elif nouveau_montant_paye > 0:
+                            nouveau_statut = "Partiellement payée"
+                        else:
+                            nouveau_statut = "Impayée"
+                            
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE factures SET montant_paye = ?, statut_paiement = ? WHERE id = ?
+                        """, (nouveau_montant_paye, nouveau_statut, fac_id))
+                        conn.commit()
+                        st.success(f"✅ Paiement de {montant_paiement:.2f} € enregistré ! Statut : {nouveau_statut}")
+                        st.rerun()
+                    else:
+                        st.error("❌ Le montant doit être supérieur à 0.")
+            
+            st.markdown("---")
+            st.subheader("📄 Générer la Facture PDF")
+            if st.button("📥 Télécharger la Facture PDF"):
+                # Récupérer toutes les données liées
+                df_fac_detail = pd.read_sql_query(f"SELECT * FROM factures WHERE id={fac_id}", conn)
+                facture_info = df_fac_detail.iloc[0].to_dict()
+                
+                devis_id_linked = facture_info['devis_id']
+                df_devis_detail = pd.read_sql_query(f"SELECT * FROM devis WHERE id={devis_id_linked}", conn)
+                devis_info = df_devis_detail.iloc[0].to_dict()
+                
+                veh_id_linked = devis_info['vehicule_id']
+                veh_info = pd.read_sql_query(f"SELECT * FROM vehicules WHERE id={veh_id_linked}", conn).iloc[0].to_dict()
+                client_info = pd.read_sql_query(f"SELECT * FROM clients WHERE id={veh_info['client_id']}", conn).iloc[0].to_dict()
+                
+                details = json.loads(devis_info['details_json'])
+                
+                pdf_path = generate_facture_pdf(facture_info, devis_info, client_info, veh_info, details)
+                
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                
+                st.download_button(
+                    label="⬇️ Cliquer ici pour télécharger le PDF",
+                    data=pdf_bytes,
+                    file_name=f"Facture_{facture_info['numero_facture']}.pdf",
+                    mime="application/pdf"
+                )
+
+    conn.close()
 
 def show_caisse():
     st.title("💰 Caisse")
