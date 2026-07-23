@@ -2981,23 +2981,23 @@ else:
     elif module_name == "users":
         show_users()
     show_accessoires()
-elif module_name == "fournisseurs":
-    show_fournisseurs()
-elif module_name == "achats":
-    show_achats()
-elif module_name == "facturation":
-    show_facturation()
-elif module_name == "caisse":
-    show_caisse()
-elif module_name == "photos":
-    show_photos()
-elif module_name == "employes":
-    show_employes()
-elif module_name == "documents":
-    show_documents()
-elif module_name == "statistiques":
-    show_statistiques()
-elif module_name == "qrcode":
-    show_qrcode()
-elif module_name == "users":
-    show_users()
+    elif module_name == "fournisseurs":
+        show_fournisseurs()
+    elif module_name == "achats":
+        show_achats()
+    elif module_name == "facturation":
+        show_facturation()
+    elif module_name == "caisse":
+        show_caisse()
+    elif module_name == "photos":
+        show_photos()
+    elif module_name == "employes":
+        show_employes()
+    elif module_name == "documents":
+        show_documents()
+    elif module_name == "statistiques":
+        show_statistiques()
+    elif module_name == "qrcode":
+        show_qrcode()
+    elif module_name == "users":
+        show_users()
