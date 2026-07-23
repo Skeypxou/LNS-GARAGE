@@ -2939,6 +2939,7 @@ if "veh_id" in query_params:
     show_qr_dashboard(int(query_params["veh_id"]))
 else:
     # MODE ERP NORMAL : Menu latéral pour le garage
+    
     # Appeler la fonction du module choisi
     if module_name == "dashboard":
         show_dashboard()
@@ -2960,27 +2961,6 @@ else:
         show_stock()
     elif module_name == "accessoires":
         show_accessoires()
-    elif module_name == "fournisseurs":
-        show_fournisseurs()
-    elif module_name == "achats":
-        show_achats()
-    elif module_name == "facturation":
-        show_facturation()
-    elif module_name == "caisse":
-        show_caisse()
-    elif module_name == "photos":
-        show_photos()
-    elif module_name == "employes":
-        show_employes()
-    elif module_name == "documents":
-        show_documents()
-    elif module_name == "statistiques":
-        show_statistiques()
-    elif module_name == "qrcode":
-        show_qrcode()
-    elif module_name == "users":
-        show_users()
-    show_accessoires()
     elif module_name == "fournisseurs":
         show_fournisseurs()
     elif module_name == "achats":
