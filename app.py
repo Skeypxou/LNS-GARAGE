@@ -1901,9 +1901,148 @@ def show_facturation():
 
     conn.close()
 
+# --- MODULE 14 : CAISSE ---
 def show_caisse():
-    st.title("💰 Caisse")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("💰 Gestion de Caisse & Trésorerie")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📊 Journal de Caisse", "➕ Nouvelle Transaction", "📈 Rapports & Solde"])
+    
+    # --- TAB 1 : JOURNAL ---
+    with tab1:
+        # Filtres
+        col_filter1, col_filter2 = st.columns(2)
+        with col_filter1:
+            filtre_type = st.selectbox("Type de transaction", ["Tous", "Entrée", "Sortie"], key="filter_caisse_type")
+        with col_filter2:
+            filtre_periode = st.selectbox("Période", ["Aujourd'hui", "7 jours", "30 jours", "Tout"], key="filter_caisse_periode")
+            
+        # Construction de la requête avec filtres
+        base_query = f"""
+            SELECT id, date_transaction, type_transaction, categorie, description, montant 
+            FROM caisse
+        """
+        conditions = []
+        
+        if filtre_type != "Tous":
+            conditions.append(f"type_transaction = '{filtre_type}'")
+            
+        if filtre_periode == "Aujourd'hui":
+            conditions.append("date_transaction = DATE('now')")
+        elif filtre_periode == "7 jours":
+            conditions.append("date_transaction >= DATE('now', '-7 days')")
+        elif filtre_periode == "30 jours":
+            conditions.append("date_transaction >= DATE('now', '-30 days')")
+            
+        where_clause = ""
+        if conditions:
+            where_clause = " WHERE " + " AND ".join(conditions)
+            
+        query = base_query + where_clause + " ORDER BY date_transaction DESC, id DESC"
+        
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            # Formater pour l'affichage
+            def format_montant(row):
+                if row['type_transaction'] == 'Entrée':
+                    return f"+{row['montant']:.2f} €"
+                else:
+                    return f"-{row['montant']:.2f} €"
+            df['Montant Formaté'] = df.apply(format_montant, axis=1)
+            
+            df_display = df[['date_transaction', 'type_transaction', 'categorie', 'description', 'Montant Formaté']]
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune transaction trouvée pour cette période.")
+
+    # --- TAB 2 : NOUVELLE TRANSACTION ---
+    with tab2:
+        with st.form("new_transaction"):
+            st.subheader("🧾 Enregistrer un mouvement d'argent")
+            
+            type_transaction = st.radio("Type de mouvement *", ["Entrée (Encaissement)", "Sortie (Décaissement)"])
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                date_transaction = st.date_input("Date de l'opération *")
+                # Catégories dynamiques selon le type
+                if type_transaction == "Entrée (Encaissement)":
+                    categorie = st.selectbox("Catégorie *", ["Paiement Client", "Vente directe", "Autre revenu"])
+                else:
+                    categorie = st.selectbox("Catégorie *", ["Achat Fournisseur", "Salaire Employé", "Charges (Loyer/EDF)", "Autre dépense"])
+                    
+            with col2:
+                montant = st.number_input("Montant (€) *", min_value=0.0, format="%.2f")
+                description = st.text_area("Description / Référence * (ex: FAC-0001, Salaire Janvier)")
+                
+            submitted = st.form_submit_button("✅ Enregistrer la transaction")
+            if submitted:
+                # Déterminer le vrai type pour la DB
+                db_type = "Entrée" if "Entrée" in type_transaction else "Sortie"
+                
+                if montant > 0 and description and date_transaction:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO caisse (type_transaction, montant, date_transaction, description, categorie)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (db_type, montant, str(date_transaction), description, categorie))
+                    conn.commit()
+                    st.success(f"✅ Transaction de {montant:.2f} € ({db_type}) enregistrée dans la caisse !")
+                else:
+                    st.error("❌ Le montant, la date et la description sont obligatoires.")
+
+    # --- TAB 3 : RAPPORTS & SOLDE ---
+    with tab3:
+        st.subheader("📊 Santé Financière du Garage")
+        
+        # Récupérer toutes les données pour les calculs globaux
+        df_all = pd.read_sql_query("SELECT * FROM caisse", conn)
+        
+        if df_all.empty:
+            st.info("Aucune donnée financière à analyser pour le moment.")
+        else:
+            # Calculs des KPI
+            total_entrees = df_all[df_all['type_transaction'] == 'Entrée']['montant'].sum()
+            total_sorties = df_all[df_all['type_transaction'] == 'Sortie']['montant'].sum()
+            solde_actuel = total_entrees - total_sorties
+            
+            # Affichage des Cartes KPI
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="📈 Total Entrées", value=f"{total_entrees:.2f} €")
+            with col2:
+                st.metric(label="📉 Total Sorties", value=f"{total_sorties:.2f} €")
+            with col3:
+                # Delta coloré : Vert si positif, Rouge si négatif
+                delta_color = "normal" if solde_actuel >= 0 else "inverse"
+                st.metric(label="💎 SOLDE NET", value=f"{solde_actuel:.2f} €", delta=f"{solde_actuel:.2f} €", delta_color=delta_color)
+                
+            st.markdown("---")
+            
+            # Préparation des graphiques Plotly
+            # 1. Graphique Barres : Entrées vs Sorties par mois
+            df_all['Mois'] = pd.to_datetime(df_all['date_transaction']).dt.to_period('M').astype(str)
+            
+            df_grouped = df_all.groupby(['Mois', 'type_transaction'])['montant'].sum().reset_index()
+            
+            fig_cashflow = px.bar(df_grouped, x='Mois', y='montant', color='type_transaction',
+                                 title="Flux de Trésorerie Mensuel (Entrées vs Sorties)",
+                                 barmode='group',
+                                 color_discrete_map={'Entrée': '#2ecc71', 'Sortie': '#e74c3c'})
+            st.plotly_chart(fig_cashflow, use_container_width=True)
+            
+            # 2. Graphique Camembert : Répartition des Sorties (Où va l'argent ?)
+            df_sorties = df_all[df_all['type_transaction'] == 'Sortie']
+            if not df_sorties.empty:
+                df_cat_sorties = df_sorties.groupby('categorie')['montant'].sum().reset_index()
+                
+                fig_expenses = px.pie(df_cat_sorties, values='montant', names='categorie', 
+                                     title="Répartition des Dépenses par Catégorie",
+                                     hole=0.4)
+                st.plotly_chart(fig_expenses, use_container_width=True)
+
+    conn.close()
 
 def show_photos():
     st.title("📸 Galerie Photos")
