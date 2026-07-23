@@ -1567,9 +1567,156 @@ def show_fournisseurs():
             st.info("Veuillez ajouter des fournisseurs d'abord pour pouvoir les modifier.")
             
     conn.close()
+# --- MODULE 12 : ACHATS ---
 def show_achats():
-    st.title("🛒 Achats")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("🛒 Gestion des Achats & Commandes")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Suivi des Commandes", "➕ Nouveau Bon de Commande", "📥 Réception & Intégration Stock"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        statut_filter = st.selectbox("Filtrer par statut", ["Tous", "Commandé", "En attente", "Reçu"], key="filter_achat")
+        
+        base_query = f"""
+            SELECT a.id, a.numero_bc, f.nom as Fournisseur, a.designation, a.reference, 
+                   a.quantite, a.montant_total, a.statut, a.date_commande
+            FROM achats a
+            LEFT JOIN fournisseurs f ON a.fournisseur_id = f.id
+        """
+        
+        if statut_filter != "Tous":
+            query = base_query + f" WHERE a.statut = '{statut_filter}' ORDER BY a.date_commande DESC"
+        else:
+            query = base_query + " ORDER BY a.date_commande DESC"
+            
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            # Ajouter des icônes de statut
+            def statut_icon_achat(val):
+                if val == "Commandé": return "🟡 Commandé"
+                elif val == "En attente": return "⏸️ En attente"
+                elif val == "Reçu": return "✅ Reçu"
+                else: return val
+            df['statut'] = df['statut'].apply(statut_icon_achat)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune commande trouvée pour ce filtre.")
+
+    # --- TAB 2 : NOUVEAU BON DE COMMANDE ---
+    with tab2:
+        df_fournisseurs = pd.read_sql_query("SELECT id, nom FROM fournisseurs", conn)
+        if df_fournisseurs.empty:
+            st.error("⚠️ Vous devez d'abord ajouter des Fournisseurs (Module 11) avant de pouvoir commander !")
+        else:
+            fournisseur_dict = df_fournisseurs.apply(lambda row: f"{row['nom']} (ID: {row['id']})", axis=1).tolist()
+            
+            with st.form("new_achat"):
+                st.subheader("🆕 Créer un Bon de Commande (BC)")
+                
+                # Générer numéro BC automatique
+                last_id_achat = pd.read_sql_query("SELECT MAX(id) as max_id FROM achats", conn)['max_id'].values[0]
+                if last_id_achat is None: last_id_achat = 0
+                default_numero_bc = f"BC-{last_id_achat+1:04d}"
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    fournisseur_choice = st.selectbox("Fournisseur *", fournisseur_dict)
+                    fournisseur_id = int(fournisseur_choice.split("ID: ")[1].replace(")", ""))
+                    numero_bc = st.text_input("N° Bon de Commande *", value=default_numero_bc)
+                    date_commande = st.date_input("Date de commande *")
+                    
+                with col2:
+                    designation = st.text_input("Désignation de l'article * (ex: Pare-chocs BMW)")
+                    reference = st.text_input("Référence fournisseur (ex: PCH-BMW-01)")
+                    quantite = st.number_input("Quantité commandée *", min_value=1, step=1)
+                    prix_unitaire = st.number_input("Prix unitaire d'achat (€) *", min_value=0.0, format="%.2f")
+                    
+                notes = st.text_area("Notes / Instructions pour le fournisseur")
+                
+                submitted = st.form_submit_button("🛒 Valider la Commande")
+                if submitted:
+                    if designation and quantite and prix_unitaire and numero_bc:
+                        montant_total = quantite * prix_unitaire
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO achats (fournisseur_id, numero_bc, date_commande, date_reception, statut, designation, reference, quantite, prix_unitaire, montant_total, notes)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (fournisseur_id, numero_bc, str(date_commande), None, "Commandé", designation, reference, quantite, prix_unitaire, montant_total, notes))
+                        conn.commit()
+                        st.success(f"✅ Bon de Commande {numero_bc} créé ! Montant : {montant_total:.2f} €")
+                    else:
+                        st.error("❌ Les champs Fournisseur, Désignation, Quantité et Prix sont obligatoires.")
+
+    # --- TAB 3 : RÉCEPTION & INTÉGRATION STOCK ---
+    with tab3:
+        st.subheader("📥 Réceptionner une commande et l'intégrer au Stock")
+        st.info("💡 Quand tu réceptionnes une commande, l'application va automatiquement chercher l'article dans ton Stock (Module 9) par sa référence et ajouter la quantité. Si l'article n'existe pas encore, elle le créera !")
+        
+        # Afficher les commandes non reçues
+        query_a_recevoir = f"""
+            SELECT a.id, a.numero_bc, f.nom as Fournisseur, a.designation, a.reference, a.quantite, a.statut
+            FROM achats a
+            LEFT JOIN fournisseurs f ON a.fournisseur_id = f.id
+            WHERE a.statut IN ('Commandé', 'En attente')
+        """
+        df_a_recevoir = pd.read_sql_query(query_a_recevoir, conn)
+        
+        if df_a_recevoir.empty:
+            st.success("🎉 Toutes les commandes ont été réceptionnées !")
+        else:
+            achat_dict = df_a_recevoir.apply(
+                lambda row: f"{row['numero_bc']} - {row['designation']} (Qté: {row['quantite']}) [AchatID:{row['id']}]", axis=1
+            ).tolist()
+            
+            achat_choice = st.selectbox("Commande à réceptionner", achat_dict)
+            achat_id = int(achat_choice.split("[AchatID:")[1].replace("]", ""))
+            
+            achat_data = df_a_recevoir[df_a_recevoir['id'] == achat_id].iloc[0]
+            ref_article = achat_data['reference']
+            qty_article = int(achat_data['quantite'])
+            designation_article = achat_data['designation']
+            
+            if st.button(f"✅ Confirmer la réception de {qty_article} x {designation_article}"):
+                cursor = conn.cursor()
+                
+                # 1. Mettre à jour le statut de l'achat
+                cursor.execute("""
+                    UPDATE achats SET statut = 'Reçu', date_reception = DATE('now') WHERE id = ?
+                """, (achat_id,))
+                
+                # 2. Vérifier si l'article existe déjà dans le stock par sa référence
+                query_check_stock = f"""
+                    SELECT id, quantite FROM stock WHERE reference = '{ref_article}'
+                """
+                df_check = pd.read_sql_query(query_check_stock, conn)
+                
+                if not df_check.empty:
+                    # L'article existe : on augmente la quantité
+                    stock_id = df_check.iloc[0]['id']
+                    cursor.execute("""
+                        UPDATE stock SET quantite = quantite + ? WHERE id = ?
+                    """, (qty_article, stock_id))
+                    st.success(f"📦 Stock mis à jour ! +{qty_article} unités ajoutées à l'article existant (Réf: {ref_article}).")
+                else:
+                    # L'article n'existe pas dans le stock : on le crée avec un prix de vente estimé (double du prix d'achat)
+                    prix_achat = float(achat_data['prix_unitaire']) if 'prix_unitaire' in achat_data else 0.0
+                    prix_vente_estime = prix_achat * 2.0 # Marge standard de 100%
+                    
+                    # On détermine le type (Pièce par défaut si c'est un pare-chocs/capot, etc.)
+                    type_article = "Pièce"
+                    
+                    cursor.execute("""
+                        INSERT INTO stock (type_article, reference, designation, quantite, prix_achat, prix_vente, seuil_alerte)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (type_article, ref_article, designation_article, qty_article, prix_achat, prix_vente_estime, 2))
+                    st.success(f"🆕 Nouvel article créé dans le Stock : {designation_article} (Qté: {qty_article}, Prix vente estimé: {prix_vente_estime:.2f} €).")
+                
+                conn.commit()
+                st.rerun()
+
+    conn.close()
 
 def show_facturation():
     st.title("🧾 Facturation")
