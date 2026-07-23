@@ -577,9 +577,245 @@ def show_sinistres():
     st.title("🛡️ Sinistres Assurance")
     st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 5 : Sinistres.")
 
+# --- FONCTION GÉNÉRATION PDF ---
+def generate_devis_pdf(devis_info, client_info, vehicule_info, details):
+    # S'assurer que le dossier pdf existe
+    if not os.path.exists("pdf"):
+        os.makedirs("pdf")
+        
+    pdf_path = f"pdf/Devis_{devis_info['numero_devis']}.pdf"
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+    
+    styles = getSampleStyleSheet()
+    elements = []
+    
+    # En-tête
+    elements.append(Paragraph("LNS GARAGE PRO - DEVIS", styles['Title']))
+    elements.append(Spacer(1, 15))
+    
+    # Informations générales
+    info_data = [
+        [f"Client: {client_info['nom']} {client_info['prenom']}", f"Date: {devis_info['date_creation']}"],
+        [f"Adresse: {client_info.get('adresse', 'N/A')}", f"N° Devis: {devis_info['numero_devis']}"],
+        [f"Véhicule: {vehicule_info['marque']} {vehicule_info['modele']}", f"Immat: {vehicule_info['immatriculation']}"],
+        [f"Carburant: {vehicule_info.get('carburant', 'N/A')}", f"Statut: {devis_info['statut']}"]
+    ]
+    info_table = Table(info_data, colWidths=[120*mm, 60*mm])
+    info_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
+    ]))
+    elements.append(info_table)
+    elements.append(Spacer(1, 20))
+    
+    # Tableau des travaux et pièces
+    table_data = [["Type", "Description", "Quantité", "Prix Unitaire", "Total"]]
+    
+    # Ajout Main d'œuvre
+    for item in details.get('mo', []):
+        if item['qty'] > 0:
+            table_data.append(["MO", item['desc'], f"{item['qty']} H", f"{item['price']:.2f} €", f"{item['total']:.2f} €"])
+            
+    # Ajout Pièces
+    for item in details.get('pieces', []):
+        if item['qty'] > 0:
+            table_data.append(["Pièce", f"{item.get('ref', '')} - {item['desc']}", f"{item['qty']}", f"{item['price']:.2f} €", f"{item['total']:.2f} €"])
+            
+    items_table = Table(table_data, colWidths=[20*mm, 70*mm, 25*mm, 30*mm, 30*mm])
+    items_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
+    ]))
+    elements.append(items_table)
+    elements.append(Spacer(1, 20))
+    
+    # Totaux
+    ht = devis_info['total_mo'] + devis_info['total_pieces']
+    totals_data = [
+        ["Total Main d'œuvre", f"{devis_info['total_mo']:.2f} €"],
+        ["Total Pièces", f"{devis_info['total_pieces']:.2f} €"],
+        ["Total Hors Taxe (HT)", f"{ht:.2f} €"],
+        ["TVA (20%)", f"{devis_info['tva']:.2f} €"],
+        ["Total TTC (À payer)", f"{devis_info['total_ttc']:.2f} €"]
+    ]
+    totals_table = Table(totals_data, colWidths=[120*mm, 50*mm])
+    totals_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, -1), (-1, -1), colors.lightgreen),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold')
+    ]))
+    elements.append(totals_table)
+    
+    # Pied de page
+    elements.append(Spacer(1, 40))
+    elements.append(Paragraph("Signature du Garage:", styles['Normal']))
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph("Signature du Client (Bon pour accord):", styles['Normal']))
+    
+    doc.build(elements)
+    return pdf_path
+
+# --- MODULE 6 : DEVIS ---
 def show_devis():
-    st.title("📝 Devis")
-    st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 6 : Devis et PDF.")
+    st.title("📝 Gestion des Devis")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Devis", "➕ Créer un Devis", "🔍 Voir / PDF / Modifier"])
+    
+    # --- TAB 1 : LISTE ---
+    with tab1:
+        query = """
+        SELECT d.numero_devis, v.immatriculation, c.nom || ' ' || c.prenom as Client, 
+               d.date_creation, d.statut, d.total_ttc
+        FROM devis d
+        JOIN vehicules v ON d.vehicule_id = v.id
+        JOIN clients c ON v.client_id = c.id
+        ORDER BY d.date_creation DESC
+        """
+        df = pd.read_sql_query(query, conn)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun devis créé pour le moment.")
+
+    # --- TAB 2 : CRÉATION ---
+    with tab2:
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom, c.prenom 
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("⚠️ Vous devez ajouter un client et un véhicule avant de créer un devis !")
+        else:
+            veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['marque']} {row['modele']} ({row['nom']} {row['prenom']}) [ID:{row['id']}]", axis=1).tolist()
+            veh_choice = st.selectbox("Véhicule concerné", veh_dict)
+            veh_id = int(veh_choice.split("[ID:")[1].replace("]", ""))
+            
+            with st.form("new_devis"):
+                col_date, col_num, col_statut = st.columns(3)
+                with col_date:
+                    date_creation = st.date_input("Date du devis *")
+                with col_num:
+                    # Génération automatique du numéro
+                    last_id = pd.read_sql_query("SELECT MAX(id) as max_id FROM devis", conn)['max_id'].values[0]
+                    if last_id is None: last_id = 0
+                    numero_devis = st.text_input("N° Devis", value=f"DEV-{last_id+1:04d}")
+                with col_statut:
+                    statut = st.selectbox("Statut", ["En attente", "Validé", "Refusé"])
+                
+                st.markdown("---")
+                st.subheader("🔧 Main d'œuvre")
+                mo_tasks = ["Débosselage", "Redressage", "Soudure", "Préparation", "Peinture", "Polissage"]
+                mo_details_list = []
+                
+                for task in mo_tasks:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        h = st.number_input(f"{task} (Heures)", min_value=0.0, step=0.5, key=f"mo_h_{task}")
+                    with col2:
+                        p = st.number_input(f"Prix / H", min_value=0.0, value=45.0, format="%.2f", key=f"mo_p_{task}")
+                    with col3:
+                        st.write(f"Total: **{h * p:.2f} €**")
+                    mo_details_list.append({"desc": task, "qty": h, "price": p, "total": h * p})
+                
+                st.markdown("---")
+                st.subheader("🔩 Pièces et Fournitures")
+                pieces_details_list = []
+                
+                # 5 lignes de pièces pré-définies pour simplifier l'interface
+                for i in range(5):
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        ref = st.text_input(f"Réf. Pièce {i+1}", key=f"p_ref_{i}")
+                    with col2:
+                        des = st.text_input(f"Désignation Pièce {i+1}", key=f"p_des_{i}")
+                    with col3:
+                        qty = st.number_input(f"Qté Pièce {i+1}", min_value=0, step=1, key=f"p_qty_{i}")
+                    with col4:
+                        px = st.number_input(f"Prix Pièce {i+1}", min_value=0.0, format="%.2f", key=f"p_px_{i}")
+                    
+                    if qty > 0 and des:
+                        pieces_details_list.append({"ref": ref, "desc": des, "qty": qty, "price": px, "total": qty * px})
+                
+                submitted = st.form_submit_button("📊 Calculer et Sauvegarder le Devis")
+                if submitted:
+                    # Calculs
+                    total_mo = sum(item['total'] for item in mo_details_list)
+                    total_pieces = sum(item['total'] for item in pieces_details_list)
+                    total_ht = total_mo + total_pieces
+                    tva = total_ht * 0.20
+                    total_ttc = total_ht + tva
+                    
+                    # Préparation du JSON pour les détails
+                    details_json = json.dumps({"mo": mo_details_list, "pieces": pieces_details_list})
+                    
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO devis (vehicule_id, numero_devis, date_creation, statut, total_pieces, total_mo, tva, total_ttc, details_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (veh_id, numero_devis, str(date_creation), statut, total_pieces, total_mo, tva, total_ttc, details_json))
+                    conn.commit()
+                    st.success(f"✅ Devis {numero_devis} sauvegardé ! Total TTC : {total_ttc:.2f} €")
+
+    # --- TAB 3 : VOIR / PDF / MODIFIER ---
+    with tab3:
+        df_devis = pd.read_sql_query("""
+            SELECT d.id, d.numero_devis, v.immatriculation, c.nom || ' ' || c.prenom as Client, d.statut, d.total_ttc
+            FROM devis d
+            JOIN vehicules v ON d.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if not df_devis.empty:
+            devis_dict = df_devis.apply(lambda row: f"{row['numero_devis']} - {row['Client']} ({row['immatriculation']}) TTC: {row['total_ttc']}€ [ID:{row['id']}]", axis=1).tolist()
+            devis_choice = st.selectbox("Choisir un devis", devis_dict)
+            devis_id = int(devis_choice.split("[ID:")[1].replace("]", ""))
+            
+            # Récupération des données
+            df_devis_detail = pd.read_sql_query(f"SELECT * FROM devis WHERE id={devis_id}", conn)
+            devis_info = df_devis_detail.iloc[0].to_dict()
+            
+            veh_info = pd.read_sql_query(f"SELECT * FROM vehicules WHERE id={devis_info['vehicule_id']}", conn).iloc[0].to_dict()
+            client_info = pd.read_sql_query(f"SELECT * FROM clients WHERE id={veh_info['client_id']}", conn).iloc[0].to_dict()
+            
+            # Affichage des infos
+            st.write(f"**Statut actuel :** {devis_info['statut']} | **Total TTC :** {devis_info['total_ttc']} €")
+            
+            # Bouton Génération PDF
+            if st.button("📄 Générer / Télécharger le PDF"):
+                details = json.loads(devis_info['details_json'])
+                pdf_path = generate_devis_pdf(devis_info, client_info, veh_info, details)
+                
+                with open(pdf_path, "rb") as f:
+                    pdf_bytes = f.read()
+                
+                st.download_button(
+                    label="⬇️ Télécharger le Devis PDF",
+                    data=pdf_bytes,
+                    file_name=f"Devis_{devis_info['numero_devis']}.pdf",
+                    mime="application/pdf"
+                )
+            
+            # Modifier le statut
+            with st.expander("🔄 Modifier le statut du devis"):
+                new_statut = st.selectbox("Nouveau statut", ["En attente", "Validé", "Refusé", "Facturé"], index=["En attente", "Validé", "Refusé", "Facturé"].index(devis_info['statut']))
+                if st.button("Sauvegarder le nouveau statut"):
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE devis SET statut=? WHERE id=?", (new_statut, devis_id))
+                    conn.commit()
+                    st.success("Statut mis à jour !")
+                    st.rerun()
+
+        else:
+            st.info("Aucun devis à afficher pour le moment.")
+            
+    conn.close()
 
 def show_ordres():
     st.title("🔧 Ordres de Réparation")
