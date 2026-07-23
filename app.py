@@ -651,12 +651,12 @@ def generate_devis_pdf(devis_info, client_info, vehicule_info, details):
     # Ajout Main d'œuvre
     for item in details.get('mo', []):
         if item['qty'] > 0:
-            table_data.append(["MO", item['desc'], f"{item['qty']} H", f"{item['price']:.2f} €", f"{item['total']:.2f} €"])
+            table_data.append(["MO", item['desc'], f"{item['qty']} H", f"{item['price']:.2f} dzd", f"{item['total']:.2f} dzd"])
             
     # Ajout Pièces
     for item in details.get('pieces', []):
         if item['qty'] > 0:
-            table_data.append(["Pièce", f"{item.get('ref', '')} - {item['desc']}", f"{item['qty']}", f"{item['price']:.2f} €", f"{item['total']:.2f} €"])
+            table_data.append(["Pièce", f"{item.get('ref', '')} - {item['desc']}", f"{item['qty']}", f"{item['price']:.2f} dzd", f"{item['total']:.2f} dzd"])
             
     items_table = Table(table_data, colWidths=[20*mm, 70*mm, 25*mm, 30*mm, 30*mm])
     items_table.setStyle(TableStyle([
@@ -672,11 +672,11 @@ def generate_devis_pdf(devis_info, client_info, vehicule_info, details):
     # Totaux
     ht = devis_info['total_mo'] + devis_info['total_pieces']
     totals_data = [
-        ["Total Main d'œuvre", f"{devis_info['total_mo']:.2f} €"],
-        ["Total Pièces", f"{devis_info['total_pieces']:.2f} €"],
-        ["Total Hors Taxe (HT)", f"{ht:.2f} €"],
-        ["TVA (20%)", f"{devis_info['tva']:.2f} €"],
-        ["Total TTC (À payer)", f"{devis_info['total_ttc']:.2f} €"]
+        ["Total Main d'œuvre", f"{devis_info['total_mo']:.2f} dzd"],
+        ["Total Pièces", f"{devis_info['total_pieces']:.2f} dzd"],
+        ["Total Hors Taxe (HT)", f"{ht:.2f} dzd"],
+        ["TVA (20%)", f"{devis_info['tva']:.2f} dzd"],
+        ["Total TTC (À payer)", f"{devis_info['total_ttc']:.2f} dzd"]
     ]
     totals_table = Table(totals_data, colWidths=[120*mm, 50*mm])
     totals_table.setStyle(TableStyle([
@@ -757,7 +757,7 @@ def show_devis():
                     with col2:
                         p = st.number_input(f"Prix / H", min_value=0.0, value=45.0, format="%.2f", key=f"mo_p_{task}")
                     with col3:
-                        st.write(f"Total: **{h * p:.2f} €**")
+                        st.write(f"Total: **{h * p:.2f} dzd**")
                     mo_details_list.append({"desc": task, "qty": h, "price": p, "total": h * p})
                 
                 st.markdown("---")
@@ -797,7 +797,7 @@ def show_devis():
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (veh_id, numero_devis, str(date_creation), statut, total_pieces, total_mo, tva, total_ttc, details_json))
                     conn.commit()
-                    st.success(f"✅ Devis {numero_devis} sauvegardé ! Total TTC : {total_ttc:.2f} €")
+                    st.success(f"✅ Devis {numero_devis} sauvegardé ! Total TTC : {total_ttc:.2f} dzd")
 
     # --- TAB 3 : VOIR / PDF / MODIFIER ---
     with tab3:
@@ -809,7 +809,7 @@ def show_devis():
         """, conn)
         
         if not df_devis.empty:
-            devis_dict = df_devis.apply(lambda row: f"{row['numero_devis']} - {row['Client']} ({row['immatriculation']}) TTC: {row['total_ttc']}€ [ID:{row['id']}]", axis=1).tolist()
+            devis_dict = df_devis.apply(lambda row: f"{row['numero_devis']} - {row['Client']} ({row['immatriculation']}) TTC: {row['total_ttc']}dzd [ID:{row['id']}]", axis=1).tolist()
             devis_choice = st.selectbox("Choisir un devis", devis_dict)
             devis_id = int(devis_choice.split("[ID:")[1].replace("]", ""))
             
@@ -821,7 +821,7 @@ def show_devis():
             client_info = pd.read_sql_query(f"SELECT * FROM clients WHERE id={veh_info['client_id']}", conn).iloc[0].to_dict()
             
             # Affichage des infos
-            st.write(f"**Statut actuel :** {devis_info['statut']} | **Total TTC :** {devis_info['total_ttc']} €")
+            st.write(f"**Statut actuel :** {devis_info['statut']} | **Total TTC :** {devis_info['total_ttc']} dzd")
             
             # Bouton Génération PDF
             if st.button("📄 Générer / Télécharger le PDF"):
@@ -917,7 +917,7 @@ def show_ordres():
                 
                 devis_options = ["Aucun devis (Travaux internes)"]
                 if not df_devis_filtered.empty:
-                    devis_dict_filtered = df_devis_filtered.apply(lambda row: f"{row['numero_devis']} - {row['statut']} ({row['total_ttc']}€) [DevisID:{row['id']}]", axis=1).tolist()
+                    devis_dict_filtered = df_devis_filtered.apply(lambda row: f"{row['numero_devis']} - {row['statut']} ({row['total_ttc']}dzd) [DevisID:{row['id']}]", axis=1).tolist()
                     devis_options.extend(devis_dict_filtered)
                 
                 devis_choice = st.selectbox("Associer à un Devis ?", devis_options)
@@ -1215,8 +1215,8 @@ def show_stock():
                     designation = st.text_input("Désignation / Nom * (ex: Pare-chocs avant)")
                 with col2:
                     quantite = st.number_input("Quantité initiale *", min_value=0, step=1)
-                    prix_achat = st.number_input("Prix d'achat unitaire (€)", min_value=0.0, format="%.2f")
-                    prix_vente = st.number_input("Prix de vente unitaire (€)", min_value=0.0, format="%.2f")
+                    prix_achat = st.number_input("Prix d'achat unitaire (dzd)", min_value=0.0, format="%.2f")
+                    prix_vente = st.number_input("Prix de vente unitaire (dzd)", min_value=0.0, format="%.2f")
                     seuil_alerte = st.number_input("Seuil d'alerte (quantité min) *", min_value=0, step=1, value=5)
                 
                 submitted = st.form_submit_button("Ajouter au catalogue")
@@ -1302,7 +1302,7 @@ def show_stock():
             col1, col2 = st.columns(2)
             with col1:
                 fig_px = px.pie(df_stats, values='Valeur_Total_Achat', names='type_article', 
-                               title="Répartition de la Valeur d'Achat du Stock (€)", hole=0.4)
+                               title="Répartition de la Valeur d'Achat du Stock (dzd)", hole=0.4)
                 st.plotly_chart(fig_px, use_container_width=True)
             with col2:
                 fig_bar = px.bar(df_stats, x='type_article', y='Total_Unites', 
@@ -1333,7 +1333,7 @@ def show_accessoires():
         
         if not df.empty:
             # Calcul automatique de la Marge
-            df['Marge_€'] = df['prix_vente'] - df['prix_achat']
+            df['Marge_dzd'] = df['prix_vente'] - df['prix_achat']
             df['Marge_%'] = ((df['prix_vente'] - df['prix_achat']) / df['prix_achat']) * 100
             df['Marge_%'] = df['Marge_%'].round(1)
             
@@ -1345,8 +1345,8 @@ def show_accessoires():
             df['Stock'] = df.apply(check_stock_accessoire, axis=1)
             
             # Affichage propre
-            df_display = df[['Stock', 'reference', 'designation', 'quantite', 'prix_achat', 'prix_vente', 'Marge_€', 'Marge_%']]
-            df_display.columns = ['Stock', 'Référence', 'Désignation', 'Qté', 'Prix Achat', 'Prix Vente', 'Marge (€)', 'Marge (%)']
+            df_display = df[['Stock', 'reference', 'designation', 'quantite', 'prix_achat', 'prix_vente', 'Marge_dzd', 'Marge_%']]
+            df_display.columns = ['Stock', 'Référence', 'Désignation', 'Qté', 'Prix Achat', 'Prix Vente', 'Marge (dzd)', 'Marge (%)']
             
             st.dataframe(df_display, use_container_width=True, hide_index=True)
         else:
@@ -1362,8 +1362,8 @@ def show_accessoires():
                 designation = st.text_input("Désignation / Nom * (ex: Clip universel pare-chocs)")
                 quantite = st.number_input("Quantité initiale *", min_value=0, step=1)
             with col2:
-                prix_achat = st.number_input("Prix d'achat unitaire (€) *", min_value=0.0, format="%.2f")
-                prix_vente = st.number_input("Prix de vente unitaire (€) *", min_value=0.0, format="%.2f")
+                prix_achat = st.number_input("Prix d'achat unitaire (dzd) *", min_value=0.0, format="%.2f")
+                prix_vente = st.number_input("Prix de vente unitaire (dzd) *", min_value=0.0, format="%.2f")
                 seuil_alerte = st.number_input("Seuil d'alerte stock", min_value=0, step=1, value=10)
                 
             submitted = st.form_submit_button("Ajouter au Catalogue")
@@ -1423,12 +1423,12 @@ def show_accessoires():
         df_stats = pd.read_sql_query("SELECT designation, quantite, prix_achat, prix_vente FROM accessoires", conn)
         if not df_stats.empty:
             st.subheader("💰 Top Marge : Les accessoires qui te rapportent le plus")
-            df_stats['Marge_€'] = df_stats['prix_vente'] - df_stats['prix_achat']
-            df_stats = df_stats.sort_values(by='Marge_€', ascending=False)
+            df_stats['Marge_dzd'] = df_stats['prix_vente'] - df_stats['prix_achat']
+            df_stats = df_stats.sort_values(by='Marge_dzd', ascending=False)
             
-            fig_marge = px.bar(df_stats.head(10), x='designation', y='Marge_€', 
-                               title="Top 10 Accessoires par Marge Unitaire (€)",
-                               color='Marge_€', color_continuous_scale='Greens')
+            fig_marge = px.bar(df_stats.head(10), x='designation', y='Marge_dzd', 
+                               title="Top 10 Accessoires par Marge Unitaire (dzd)",
+                               color='Marge_dzd', color_continuous_scale='Greens')
             st.plotly_chart(fig_marge, use_container_width=True)
             
             st.subheader("⚠️ Accessoires à commander urgently (Stock Faible)")
