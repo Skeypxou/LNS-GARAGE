@@ -1017,9 +1017,141 @@ def show_ordres():
             
     conn.close()
 
+# --- MODULE 8 : SUIVI ATELIER ---
 def show_atelier():
-    st.title("🏭 Suivi Atelier")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("🏭 Suivi Atelier - Progression des Travaux")
+    conn = get_connection()
+    
+    # Définition des étapes obligatoires du workflow garage
+    etapes_atelier = [
+        "Réception", 
+        "Diagnostic", 
+        "Tôlerie", 
+        "Préparation", 
+        "Peinture", 
+        "Remontage", 
+        "Contrôle Qualité", 
+        "Livraison"
+    ]
+    
+    tab1, tab2 = st.tabs(["🚜 Tableau de l'Atelier", "📊 Progression Détaillée"])
+    
+    # --- TAB 1 : TABLEAU DE L'ATELIER ---
+    with tab1:
+        # Afficher les véhicules actuellement dans l'atelier (OR non terminés)
+        query = """
+        SELECT o.numero_or, v.immatriculation, v.marque, v.modele, 
+               c.nom || ' ' || c.prenom as 'Client', 
+               o.statut, o.responsable
+        FROM ordres_reparation o
+        JOIN vehicules v ON o.vehicule_id = v.id
+        JOIN clients c ON v.client_id = c.id
+        WHERE o.statut != 'Terminé'
+        ORDER BY o.date_debut ASC
+        """
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("🎉 Aucun véhicule en cours de réparation dans l'atelier !")
+    
+    # --- TAB 2 : PROGRESSION DÉTAILLÉE ---
+    with tab2:
+        # Récupérer les OR actifs
+        df_or_actifs = pd.read_sql_query("""
+            SELECT o.id, o.numero_or, v.immatriculation, v.marque, c.nom || ' ' || c.prenom as Client
+            FROM ordres_reparation o
+            JOIN vehicules v ON o.vehicule_id = v.id
+            JOIN clients c ON v.client_id = c.id
+            WHERE o.statut != 'Terminé'
+        """, conn)
+        
+        if df_or_actifs.empty:
+            st.info("Aucun véhicule à suivre pour le moment.")
+        else:
+            # Menu pour choisir le véhicule
+            or_dict = df_or_actifs.apply(lambda row: f"{row['numero_or']} - {row['immatriculation']} ({row['Client']}) [ORID:{row['id']}]", axis=1).tolist()
+            or_choice = st.selectbox("Choisir un Ordre de Réparation à suivre", or_dict)
+            or_id = int(or_choice.split("[ORID:")[1].replace("]", ""))
+            
+            # Récupérer ou créer les infos de suivi pour cet OR
+            df_suivi = pd.read_sql_query(f"SELECT * FROM suivi_atelier WHERE or_id={or_id}", conn)
+            
+            # Si le véhicule n'a pas encore de suivi, on le crée à l'étape "Réception"
+            if df_suivi.empty:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO suivi_atelier (or_id, etape_actuelle, progression)
+                    VALUES (?, ?, ?)
+                """, (or_id, etapes_atelier[0], 12))
+                conn.commit()
+                # Recharger les données
+                df_suivi = pd.read_sql_query(f"SELECT * FROM suivi_atelier WHERE or_id={or_id}", conn)
+            
+            suivi_data = df_suivi.iloc[0]
+            current_etape = suivi_data['etape_actuelle']
+            current_progress = int(suivi_data['progression'])
+            current_etape_index = etapes_atelier.index(current_etape) if current_etape in etapes_atelier else 0
+            
+            # Affichage visuel des étapes (Les colonnes avec les icônes)
+            st.markdown("---")
+            cols = st.columns(len(etapes_atelier))
+            
+            for i, etape in enumerate(etapes_atelier):
+                with cols[i]:
+                    if i < current_etape_index:
+                        # Etape terminée
+                        st.markdown(f"<div style='text-align: center; background-color: #d4edda; padding: 10px; border-radius: 5px; color: black;'><b>✅</b><br>{etape}</div>", unsafe_allow_html=True)
+                    elif i == current_etape_index:
+                        # Etape en cours
+                        st.markdown(f"<div style='text-align: center; background-color: #cce5ff; padding: 10px; border-radius: 5px; color: black; border: 2px solid #1E3A8A;'><b>🔧</b><br><b>{etape}</b></div>", unsafe_allow_html=True)
+                    else:
+                        # Etape à venir
+                        st.markdown(f"<div style='text-align: center; background-color: #f8f9fa; padding: 10px; border-radius: 5px; color: grey;'><b>⬜</b><br>{etape}</div>", unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Barre de progression globale
+            st.progress(current_progress / 100, text=f"Progression globale : {current_progress}%")
+            
+            # Formulaire pour avancer le véhicule
+            st.subheader("🚀 Avancer le véhicule dans l'atelier")
+            
+            with st.form("update_etape"):
+                # Calcul de l'étape suivante
+                next_etape_index = current_etape_index + 1 if current_etape_index < len(etapes_atelier) - 1 else current_etape_index
+                
+                new_etape = st.selectbox(
+                    "Définir l'étape actuelle :", 
+                    etapes_atelier, 
+                    index=current_etape_index
+                )
+                
+                submitted = st.form_submit_button("Mettre à jour la progression")
+                if submitted:
+                    new_etape_index = etapes_atelier.index(new_etape)
+                    # Calcul du pourcentage : 8 étapes = 12.5% par étape (on arrondit)
+                    new_progress = int((new_etape_index + 1) * (100 / len(etapes_atelier)))
+                    
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE suivi_atelier SET etape_actuelle=?, progression=? WHERE or_id=?
+                    """, (new_etape, new_progress, or_id))
+                    conn.commit()
+                    
+                    # Si on passe à "Livraison", on termine automatiquement l'Ordre de Réparation
+                    if new_etape == "Livraison":
+                        cursor.execute("UPDATE ordres_reparation SET statut='Terminé' WHERE id=?", (or_id,))
+                        conn.commit()
+                        st.balloons() # Petit effet visuel de réussite !
+                        st.success("🎉 Véhicule livré ! L'Ordre de Réparation est maintenant marqué comme TERMINÉ.")
+                    else:
+                        st.success(f"✅ Progression mise à jour : Étape **{new_etape}** ({new_progress}%)")
+                    
+                    st.rerun() # Rafraîchir la page pour voir les couleurs changer immédiatement
+
+    conn.close()
 
 def show_stock():
     st.title("📦 Stock")
