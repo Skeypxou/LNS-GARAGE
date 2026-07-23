@@ -1153,9 +1153,154 @@ def show_atelier():
 
     conn.close()
 
+# --- MODULE 9 : STOCK ---
 def show_stock():
-    st.title("📦 Stock")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("📦 Gestion du Stock")
+    conn = get_connection()
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Inventaire", "➕ Entrée Stock", "➖ Sortie Stock", "⚠️ Alertes & Statistiques"])
+    
+    # --- TAB 1 : INVENTAIRE ---
+    with tab1:
+        # Filtre par type d'article
+        filtre_type = st.selectbox("Filtrer par catégorie", ["Tous", "Consommable", "Pièce"], key="filtre_stock")
+        
+        if filtre_type == "Tous":
+            query = "SELECT id, type_article, reference, designation, quantite, prix_achat, prix_vente, seuil_alerte FROM stock ORDER BY designation"
+        else:
+            query = f"SELECT id, type_article, reference, designation, quantite, prix_achat, prix_vente, seuil_alerte FROM stock WHERE type_article='{filtre_type}' ORDER BY designation"
+            
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            # Ajouter une colonne visuelle pour le statut du stock
+            def check_stock(row):
+                if row['quantite'] <= row['seuil_alerte']:
+                    return "🔴 Stock Faible"
+                elif row['quantite'] == 0:
+                    return "⚫ Rupture"
+                else:
+                    return "🟢 OK"
+            
+            df['Statut'] = df.apply(check_stock, axis=1)
+            
+            # Réorganiser les colonnes pour l'affichage
+            df_display = df[['Statut', 'type_article', 'reference', 'designation', 'quantite', 'prix_achat', 'prix_vente']]
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun article en stock pour le moment.")
+
+    # --- TAB 2 : ENTRÉE STOCK ---
+    with tab2:
+        action = st.radio("Choisir l'action", ["Ajouter un nouvel article", "Réapprovisionner un article existant"])
+        
+        if action == "Ajouter un nouvel article":
+            with st.form("add_article"):
+                st.subheader("🆕 Nouvel Article")
+                col1, col2 = st.columns(2)
+                with col1:
+                    type_article = st.selectbox("Type d'article *", ["Consommable", "Pièce"])
+                    reference = st.text_input("Référence (ex: PCH-AV01)")
+                    designation = st.text_input("Désignation / Nom * (ex: Pare-chocs avant)")
+                with col2:
+                    quantite = st.number_input("Quantité initiale *", min_value=0, step=1)
+                    prix_achat = st.number_input("Prix d'achat unitaire (€)", min_value=0.0, format="%.2f")
+                    prix_vente = st.number_input("Prix de vente unitaire (€)", min_value=0.0, format="%.2f")
+                    seuil_alerte = st.number_input("Seuil d'alerte (quantité min) *", min_value=0, step=1, value=5)
+                
+                submitted = st.form_submit_button("Ajouter au catalogue")
+                if submitted:
+                    if designation and quantite >= 0:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO stock (type_article, reference, designation, quantite, prix_achat, prix_vente, seuil_alerte)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (type_article, reference, designation, quantite, prix_achat, prix_vente, seuil_alerte))
+                        conn.commit()
+                        st.success(f"✅ Article '{designation}' ajouté avec {quantite} unités !")
+                    else:
+                        st.error("❌ La désignation et la quantité sont obligatoires.")
+
+        elif action == "Réapprovisionner un article existant":
+            df_existing = pd.read_sql_query("SELECT id, designation, quantite FROM stock", conn)
+            if df_existing.empty:
+                st.warning("Le catalogue est vide. Ajoutez d'abord un nouvel article.")
+            else:
+                art_dict = df_existing.apply(lambda row: f"{row['designation']} (Stock actuel: {row['quantite']}) [ID:{row['id']}]", axis=1).tolist()
+                art_choice = st.selectbox("Article à réapprovisionner", art_dict)
+                art_id = int(art_choice.split("[ID:")[1].replace("]", ""))
+                
+                qty_add = st.number_input("Quantité ajoutée", min_value=1, step=1)
+                new_buy_price = st.number_input("Nouveau prix d'achat (si changé)", min_value=0.0, format="%.2f")
+                
+                if st.button("📥 Réapprovisionner"):
+                    cursor = conn.cursor()
+                    # On met à jour la quantité et le prix d'achat (le prix peut fluctuer)
+                    cursor.execute("""
+                        UPDATE stock SET quantite = quantite + ?, prix_achat = ? WHERE id = ?
+                    """, (qty_add, new_buy_price, art_id))
+                    conn.commit()
+                    st.success(f"✅ Stock mis à jour ! {qty_add} unités ajoutées.")
+
+    # --- TAB 3 : SORTIE STOCK ---
+    with tab3:
+        df_existing = pd.read_sql_query("SELECT id, designation, quantite FROM stock WHERE quantite > 0", conn)
+        if df_existing.empty:
+            st.warning("Aucun article disponible en stock pour une sortie.")
+        else:
+            art_dict = df_existing.apply(lambda row: f"{row['designation']} (Dispo: {row['quantite']}) [ID:{row['id']}]", axis=1).tolist()
+            art_choice = st.selectbox("Article à consommer / sortir", art_dict)
+            art_id = int(art_choice.split("[ID:")[1].replace("]", ""))
+            
+            qty_remove = st.number_input("Quantité sortie", min_value=1, step=1)
+            
+            if st.button("📤 Sortir du stock"):
+                # Vérifier qu'on ne sort pas plus que ce qu'on a
+                current_qty = df_existing[df_existing['id'] == art_id]['quantite'].values[0]
+                if qty_remove > current_qty:
+                    st.error(f"❌ Impossible ! Vous essayez de sortir {qty_remove} unités, mais il n'y en a que {current_qty} en stock.")
+                else:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE stock SET quantite = quantite - ? WHERE id = ?
+                    """, (qty_remove, art_id))
+                    conn.commit()
+                    st.success(f"✅ {qty_remove} unité(s) sorties du stock !")
+                    if (current_qty - qty_remove) <= 5: # Valeur d'alerte générique
+                        st.warning("⚠️ Attention, le stock de cet article est maintenant bas !")
+
+    # --- TAB 4 : ALERTES & STATS ---
+    with tab4:
+        st.subheader("⚠️ Articles en Stock Faible ou en Rupture")
+        df_alertes = pd.read_sql_query("SELECT designation, quantite, seuil_alerte FROM stock WHERE quantite <= seuil_alerte", conn)
+        if not df_alertes.empty:
+            st.dataframe(df_alertes, use_container_width=True, hide_index=True)
+        else:
+            st.info("🎉 Aucune alerte de stock faible ! Tout est bien approvisionné.")
+            
+        st.markdown("---")
+        st.subheader("📊 Valeur du Stock par Catégorie")
+        
+        df_stats = pd.read_sql_query("""
+            SELECT type_article, SUM(quantite * prix_achat) as Valeur_Total_Achat, SUM(quantite) as Total_Unites
+            FROM stock
+            GROUP BY type_article
+        """, conn)
+        
+        if not df_stats.empty:
+            col1, col2 = st.columns(2)
+            with col1:
+                fig_px = px.pie(df_stats, values='Valeur_Total_Achat', names='type_article', 
+                               title="Répartition de la Valeur d'Achat du Stock (€)", hole=0.4)
+                st.plotly_chart(fig_px, use_container_width=True)
+            with col2:
+                fig_bar = px.bar(df_stats, x='type_article', y='Total_Unites', 
+                                 title="Nombre d'Unités par Catégorie", color='type_article')
+                st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("Aucune donnée statistique disponible pour le moment.")
+
+    conn.close()
 
 def show_accessoires():
     st.title("🔩 Accessoires")
