@@ -251,6 +251,18 @@ def update_db_schema():
             FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
         )
     """)
+        # 6. Créer la table documents si elle n'existe pas
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicule_id INTEGER,
+            type_document TEXT,
+            nom_fichier TEXT,
+            chemin_fichier TEXT,
+            date_upload DATE,
+            FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+        )
+    """)
         
     conn.commit()
     conn.close()
@@ -2490,9 +2502,164 @@ def show_employes():
 
     conn.close()
 
+# --- MODULE 17 : DOCUMENTS ---
 def show_documents():
-    st.title("📂 Documents")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("📂 Coffre-Fort Documentaire")
+    conn = get_connection()
+    
+    # S'assurer que le dossier documents existe physiquement
+    if not os.path.exists("documents"):
+        os.makedirs("documents")
+    
+    tab1, tab2, tab3 = st.tabs(["🗄️ Tous les Documents", "➕ Ajouter un Document", "🔍 Documents d'un Véhicule"])
+    
+    # --- TAB 1 : LISTE GLOBALE ---
+    with tab1:
+        filtre_type = st.selectbox("Filtrer par type", ["Tous", "Carte grise", "Assurance", "Expertise", "Facture", "Contrat", "Autre"], key="filter_doc_type")
+        
+        base_query = f"""
+            SELECT d.id, v.immatriculation, d.type_document, d.nom_fichier, d.date_upload
+            FROM documents d
+            JOIN vehicules v ON d.vehicule_id = v.id
+        """
+        
+        if filtre_type != "Tous":
+            query = base_query + f" WHERE d.type_document = '{filtre_type}' ORDER BY d.date_upload DESC"
+        else:
+            query = base_query + " ORDER BY d.date_upload DESC"
+            
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            for index, row in df.iterrows():
+                col1, col2, col3, col4 = st.columns([2, 2, 3, 1])
+                with col1:
+                    st.write(f"**{row['immatriculation']}**")
+                with col2:
+                    st.write(f"{row['type_document']}")
+                with col3:
+                    st.write(f"{row['nom_fichier']} ({row['date_upload']})")
+                with col4:
+                    # Bouton de téléchargement
+                    filepath = row['chemin_fichier']
+                    if os.path.exists(filepath):
+                        with open(filepath, "rb") as f:
+                            file_bytes = f.read()
+                        st.download_button(
+                            label="⬇️", 
+                            data=file_bytes, 
+                            file_name=row['nom_fichier'],
+                            key=f"dl_{row['id']}"
+                        )
+                    else:
+                        st.warning("Fichier absent")
+        else:
+            st.info("Aucun document archivé pour le moment.")
+
+    # --- TAB 2 : AJOUTER ---
+    with tab2:
+        df_vehicules = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, v.marque, v.modele, c.nom || ' ' || c.prenom as Client
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if df_vehicules.empty:
+            st.error("⚠️ Vous devez ajouter un client et un véhicule avant d'importer des documents !")
+        else:
+            veh_dict = df_vehicules.apply(lambda row: f"{row['immatriculation']} - {row['marque']} {row['modele']} ({row['Client']}) [VehID:{row['id']}]", axis=1).tolist()
+            veh_choice = st.selectbox("Véhicule concerné *", veh_dict)
+            veh_id = int(veh_choice.split("[VehID:")[1].replace("]", ""))
+            
+            type_document = st.selectbox("Type de document *", ["Carte grise", "Assurance", "Expertise", "Facture", "Contrat", "Autre"])
+            
+            # Upload de fichier (pdf, images, word)
+            uploaded_file = st.file_uploader("Choisir un document", type=["pdf", "png", "jpg", "jpeg", "docx", "xlsx"])
+            
+            if uploaded_file is not None:
+                st.success(f"Fichier sélectionné : {uploaded_file.name}")
+                
+                if st.button("💾 Archiver le document"):
+                    cursor = conn.cursor()
+                    
+                    # Générer un nom de fichier unique pour le stockage local
+                    timestamp = int(time.time())
+                    safe_filename = f"veh_{veh_id}_{type_document.replace(' ', '_')}_{timestamp}_{uploaded_file.name}"
+                    filepath = os.path.join("documents", safe_filename)
+                    
+                    # Sauvegarder physiquement le fichier
+                    with open(filepath, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                        
+                    # Sauvegarder le chemin dans la DB
+                    cursor.execute("""
+                        INSERT INTO documents (vehicule_id, type_document, nom_fichier, chemin_fichier, date_upload)
+                        VALUES (?, ?, ?, ?, DATE('now'))
+                    """, (veh_id, type_document, uploaded_file.name, filepath))
+                    conn.commit()
+                    st.success(f"✅ Document '{uploaded_file.name}' archivé avec succès dans le coffre-fort !")
+
+    # --- TAB 3 : DOCUMENTS D'UN VÉHICULE ---
+    with tab3:
+        df_veh_list = pd.read_sql_query("""
+            SELECT v.id, v.immatriculation, c.nom || ' ' || c.prenom as Client
+            FROM vehicules v JOIN clients c ON v.client_id = c.id
+        """, conn)
+        
+        if not df_veh_list.empty:
+            veh_dict_detail = df_veh_list.apply(lambda row: f"{row['immatriculation']} ({row['Client']}) [VehID:{row['id']}]", axis=1).tolist()
+            veh_choice_detail = st.selectbox("Choisir un véhicule pour voir ses documents", veh_dict_detail)
+            veh_id_detail = int(veh_choice_detail.split("[VehID:")[1].replace("]", ""))
+            
+            # Récupérer les documents de ce véhicule
+            df_veh_docs = pd.read_sql_query(f"""
+                SELECT id, type_document, nom_fichier, chemin_fichier, date_upload 
+                FROM documents WHERE vehicule_id = {veh_id_detail}
+            """, conn)
+            
+            if not df_veh_docs.empty:
+                # Afficher les documents groupés par type
+                types_docs = ["Carte grise", "Assurance", "Expertise", "Facture", "Contrat", "Autre"]
+                
+                for type_doc in types_docs:
+                    df_type = df_veh_docs[df_veh_docs['type_document'] == type_doc]
+                    if not df_type.empty:
+                        st.subheader(f"📄 {type_doc}")
+                        
+                        for index, row in df_type.iterrows():
+                            col1, col2, col3 = st.columns([5, 1, 1])
+                            with col1:
+                                st.write(f"- {row['nom_fichier']} (Ajouté le : {row['date_upload']})")
+                            with col2:
+                                # Bouton Télécharger
+                                filepath = row['chemin_fichier']
+                                if os.path.exists(filepath):
+                                    with open(filepath, "rb") as f:
+                                        file_bytes = f.read()
+                                    st.download_button(
+                                        label="⬇️ PDF", 
+                                        data=file_bytes, 
+                                        file_name=row['nom_fichier'],
+                                        key=f"dlv_{row['id']}"
+                                    )
+                                else:
+                                    st.error("Fichier manquant")
+                            with col3:
+                                # Bouton Supprimer
+                                if st.button("🗑️", key=f"del_{row['id']}"):
+                                    filepath_to_del = row['chemin_fichier']
+                                    if os.path.exists(filepath_to_del):
+                                        os.remove(filepath_to_del)
+                                    cursor = conn.cursor()
+                                    cursor.execute(f"DELETE FROM documents WHERE id = {row['id']}")
+                                    conn.commit()
+                                    st.success("Document supprimé !")
+                                    st.rerun()
+            else:
+                st.info("Aucun document archivé pour ce véhicule pour le moment.")
+        else:
+            st.info("Aucun véhicule enregistré.")
+
+    conn.close()
 
 # --- MODULE 18 : STATISTIQUES ---
 def show_statistiques():
