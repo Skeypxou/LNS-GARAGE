@@ -28,7 +28,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     :root {
-        --primary-color: #1E3A8A; /* Bleu professionnel */
+        --primary-color:  #2C3E50; /* Bleu professionnel */
         --bg-color: #F3F4F6;
     }
     /* Sidebar stylisée */
