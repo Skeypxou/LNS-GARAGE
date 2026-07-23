@@ -217,6 +217,24 @@ def update_db_schema():
             seuil_alerte INTEGER DEFAULT 10
         )
     """)
+        # 4. Créer la table achats si elle n'existe pas
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS achats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fournisseur_id INTEGER,
+            numero_bc TEXT,
+            date_commande DATE,
+            date_reception DATE,
+            statut TEXT,
+            designation TEXT,
+            reference TEXT,
+            quantite INTEGER,
+            prix_unitaire REAL,
+            montant_total REAL,
+            notes TEXT,
+            FOREIGN KEY(fournisseur_id) REFERENCES fournisseurs(id)
+        )
+    """
     conn.commit()
     conn.close()
 # Initialiser la DB au lancement
