@@ -1,233 +1,538 @@
+# ==========================================
+# LNS GARAGE PRO - APPLICATION COMPLÈTE
+# Fichier unique : app.py
+# ==========================================
+
 import streamlit as st
 import sqlite3
 import pandas as pd
+import plotly.express as px
+import os
 
-# -------------------
-# Configuration
-# -------------------
-
+# --- 1. CONFIGURATION DE LA PAGE ---
 st.set_page_config(
-    page_title="LNS GARAGE",
+    page_title="LNS GARAGE PRO",
     page_icon="🚗",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# -------------------
-# Logo
-# -------------------
+# --- 2. CSS POUR DESIGN ERP MODERNE ---
+st.markdown("""
+<style>
+    :root {
+        --primary-color: #1E3A8A; /* Bleu professionnel */
+        --bg-color: #F3F4F6;
+    }
+    /* Sidebar stylisée */
+    [data-testid="stSidebar"] {
+        background-color: var(--primary-color);
+        color: white;
+    }
+    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label {
+        color: white !important;
+    }
+    /* Boutons stylisés */
+    .stButton>button {
+        background-color: var(--primary-color);
+        color: white;
+        border-radius: 8px;
+        border: none;
+        padding: 10px 24px;
+    }
+    /* Cartes statistiques (KPI) */
+    .kpi-card {
+        background-color: white;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        text-align: center;
+        margin-bottom: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
+# --- 3. GESTION BASE DE DONNÉES SQLITE ---
+DB_PATH = "lns_garage_database.db"
+
+def init_db():
+    """Crée la base de données et toutes les tables si elles n'existent pas."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Table Utilisateurs (Module 20)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS utilisateurs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, nom TEXT, pseudo TEXT UNIQUE, 
+        mot_de_passe TEXT, role TEXT
+    )""")
+
+    # Table Clients (Module 2)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS clients (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, nom TEXT, prenom TEXT, 
+        telephone TEXT, telephone2 TEXT, email TEXT, adresse TEXT, 
+        ville TEXT, notes TEXT, date_creation DATE
+    )""")
+
+    # Table Véhicules (Module 3)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS vehicules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, 
+        immatriculation TEXT, vin TEXT, marque TEXT, modele TEXT, 
+        annee INTEGER, couleur TEXT, kilometrage INTEGER, carburant TEXT,
+        FOREIGN KEY(client_id) REFERENCES clients(id)
+    )""")
+
+    # Table Réception (Module 4)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS reception (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, vehicule_id INTEGER, 
+        date_entree DATE, kilometrage INTEGER, niveau_carburant TEXT, 
+        observations TEXT, roue_secours BOOLEAN, cric BOOLEAN, 
+        radio BOOLEAN, documents BOOLEAN, clees BOOLEAN, signature_client BLOB,
+        FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+    )""")
+
+    # Table Sinistres (Module 5)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sinistres (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, vehicule_id INTEGER, 
+        compagnie TEXT, numero_dossier TEXT, expert TEXT, date_expertise DATE, 
+        montant_valide REAL, commentaires TEXT,
+        FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+    )""")
+
+    # Table Devis (Module 6)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS devis (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, vehicule_id INTEGER, 
+        numero_devis TEXT, date_creation DATE, statut TEXT, 
+        total_pieces REAL, total_mo REAL, tva REAL, total_ttc REAL,
+        FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+    )""")
+
+    # Table Ordres de Réparation (Module 7)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ordres_reparation (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, devis_id INTEGER, 
+        numero_or TEXT, responsable TEXT, date_debut DATE, 
+        date_fin DATE, statut TEXT,
+        FOREIGN KEY(devis_id) REFERENCES devis(id)
+    )""")
+
+    # Table Suivi Atelier (Module 8)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS suivi_atelier (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, or_id INTEGER, 
+        etape_actuelle TEXT, progression INTEGER DEFAULT 0,
+        FOREIGN KEY(or_id) REFERENCES ordres_reparation(id)
+    )""")
+
+    # Table Stock (Module 9)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS stock (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, type_article TEXT, 
+        reference TEXT, designation TEXT, quantite INTEGER, 
+        prix_achat REAL, prix_vente REAL, seuil_alerte INTEGER
+    )""")
+
+    # Table Fournisseurs (Module 11)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS fournisseurs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, nom TEXT, telephone TEXT, 
+        email TEXT, adresse TEXT
+    )""")
+
+    # Table Factures (Module 13)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS factures (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, devis_id INTEGER, 
+        numero_facture TEXT, date_creation DATE, statut_paiement TEXT, 
+        montant_paye REAL,
+        FOREIGN KEY(devis_id) REFERENCES devis(id)
+    )""")
+
+    # Table Caisse (Module 14)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS caisse (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, type_transaction TEXT, 
+        montant REAL, date_transaction DATE, description TEXT, categorie TEXT
+    )""")
+
+    # Table Employés (Module 16)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS employes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, nom TEXT, fonction TEXT, 
+        telephone TEXT, salaire REAL
+    )""")
+
+    # Table Photos (Module 15)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, vehicule_id INTEGER, 
+        type_photo TEXT, chemin_fichier TEXT, date_upload DATE,
+        FOREIGN KEY(vehicule_id) REFERENCES vehicules(id)
+    )""")
+
+    # Création d'un admin par défaut si la table est vide
+    cursor.execute("SELECT * FROM utilisateurs WHERE role='Administrateur'")
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO utilisateurs (nom, pseudo, mot_de_passe, role) VALUES (?, ?, ?, ?)",
+                       ('Admin LNS', 'admin', 'admin123', 'Administrateur'))
+
+    conn.commit()
+    conn.close()
+
+# Initialiser la DB au lancement
+init_db()
+
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
+# --- 4. MENU DE NAVIGATION ---
+# Logo placeholder
 try:
-    st.image("assets/logo.png", width=200)
+    st.sidebar.image("assets/logo.png", width=150)
 except:
-    st.title("LNS GARAGE")
+    st.sidebar.markdown("# 🚗 LNS GARAGE PRO")
 
-st.title("Gestion de Tôlerie Automobile")
+st.sidebar.markdown("---")
 
-# -------------------
-# Base de données
-# -------------------
+menu_items = {
+    "📊 Tableau de bord": "dashboard",
+    "👤 Clients": "clients",
+    "🚘 Véhicules": "vehicules",
+    "📥 Réception Véhicule": "reception",
+    "🛡️ Sinistres Assurance": "sinistres",
+    "📝 Devis": "devis",
+    "🔧 Ordres de Réparation": "ordres",
+    "🏭 Suivi Atelier": "atelier",
+    "📦 Stock": "stock",
+    "🔩 Accessoires": "accessoires",
+    "🏭 Fournisseurs": "fournisseurs",
+    "🛒 Achats": "achats",
+    "🧾 Facturation": "facturation",
+    "💰 Caisse": "caisse",
+    "📸 Galerie Photos": "photos",
+    "👷 Employés": "employes",
+    "📂 Documents": "documents",
+    "📈 Statistiques": "statistiques",
+    "📱 QR Code": "qrcode",
+    "🔐 Multi-Utilisateurs": "users"
+}
 
-conn = sqlite3.connect("database.db", check_same_thread=False)
-cursor = conn.cursor()
+choice = st.sidebar.radio("Navigation", list(menu_items.keys()))
+module_name = menu_items[choice]
 
-# -------------------
-# Création tables
-# -------------------
+# ==========================================
+# DÉFINITION DES MODULES (FONCTIONS)
+# ==========================================
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS clients(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-nom TEXT,
-telephone TEXT,
-adresse TEXT
-)
-""")
+# --- MODULE 1 : TABLEAU DE BORD ---
+def show_dashboard():
+    st.title("📊 Tableau de Bord - LNS GARAGE PRO")
+    conn = get_connection()
+    
+    df_clients = pd.read_sql_query("SELECT COUNT(*) as count FROM clients", conn)
+    df_vehicules = pd.read_sql_query("SELECT COUNT(*) as count FROM vehicules", conn)
+    df_devis = pd.read_sql_query("SELECT COUNT(*) as count FROM devis WHERE statut='En attente'", conn)
+    df_factures = pd.read_sql_query("SELECT COUNT(*) as count FROM factures WHERE statut_paiement='Impayée'", conn)
+    
+    nb_clients = df_clients['count'].values[0]
+    nb_vehicules = df_vehicules['count'].values[0]
+    nb_devis_attente = df_devis['count'].values[0]
+    nb_factures_impayees = df_factures['count'].values[0]
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"<div class='kpi-card'><h3>Clients</h3><h1>{nb_clients}</h1></div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div class='kpi-card'><h3>Véhicules</h3><h1>{nb_vehicules}</h1></div>", unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"<div class='kpi-card'><h3>Devis en attente</h3><h1>{nb_devis_attente}</h1></div>", unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"<div class='kpi-card'><h3>Factures impayées</h3><h1>{nb_factures_impayees}</h1></div>", unsafe_allow_html=True)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS vehicules(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-client TEXT,
-immatriculation TEXT,
-marque TEXT,
-modele TEXT,
-couleur TEXT
-)
-""")
+    st.markdown("---")
+    st.subheader("Analyse visuelle")
+    
+    col_graph1, col_graph2 = st.columns(2)
+    
+    with col_graph1:
+        df_marques = pd.read_sql_query("SELECT marque, COUNT(*) as count FROM vehicules GROUP BY marque", conn)
+        if not df_marques.empty:
+            fig_marques = px.pie(df_marques, values='count', names='marque', title="Véhicules par Marque", hole=0.4)
+            st.plotly_chart(fig_marques, use_container_width=True)
+        else:
+            st.info("Aucun véhicule enregistré pour afficher le graphique.")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS devis(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-client TEXT,
-vehicule TEXT,
-montant REAL,
-statut TEXT
-)
-""")
+    with col_graph2:
+        df_caisse = pd.read_sql_query("SELECT categorie, SUM(montant) as total FROM caisse GROUP BY categorie", conn)
+        if not df_caisse.empty:
+            fig_caisse = px.bar(df_caisse, x='categorie', y='total', title="Flux Caisse par Catégorie", color='categorie')
+            st.plotly_chart(fig_caisse, use_container_width=True)
+        else:
+            st.info("Aucune transaction en caisse pour afficher le graphique.")
+            
+    conn.close()
 
-conn.commit()
+# --- MODULE 2 : CLIENTS ---
+def show_clients():
+    st.title("👤 Gestion des Clients")
+    conn = get_connection()
+    
+    tab1, tab2, tab3 = st.tabs(["📋 Liste des Clients", "➕ Ajouter un Client", "🔍 Détails / Modifier"])
+    
+    with tab1:
+        df = pd.read_sql_query("SELECT id, nom, prenom, telephone, email, ville FROM clients ORDER BY nom", conn)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun client enregistré.")
 
-# -------------------
-# Menu
-# -------------------
+    with tab2:
+        with st.form("ajout_client"):
+            col1, col2 = st.columns(2)
+            with col1:
+                nom = st.text_input("Nom *")
+                prenom = st.text_input("Prénom *")
+                telephone = st.text_input("Téléphone *")
+            with col2:
+                telephone2 = st.text_input("Téléphone secondaire")
+                email = st.text_input("Email")
+                ville = st.text_input("Ville")
+            
+            adresse = st.text_area("Adresse")
+            notes = st.text_area("Notes internes")
+            
+            submitted = st.form_submit_button("Enregistrer le client")
+            if submitted:
+                if nom and prenom and telephone:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO clients (nom, prenom, telephone, telephone2, email, adresse, ville, notes, date_creation)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, DATE('now'))
+                    """, (nom, prenom, telephone, telephone2, email, adresse, ville, notes))
+                    conn.commit()
+                    st.success(f"Client {nom} {prenom} ajouté avec succès !")
+                else:
+                    st.error("Les champs Nom, Prénom et Téléphone sont obligatoires.")
 
-menu = st.sidebar.radio(
-    "Navigation",
-    [
-        "Tableau de bord",
-        "Clients",
-        "Véhicules",
-        "Devis"
-    ]
-)
+    with tab3:
+        df_clients = pd.read_sql_query("SELECT id, nom, prenom FROM clients", conn)
+        if not df_clients.empty:
+            client_dict = df_clients.apply(lambda row: f"{row['nom']} {row['prenom']} (ID: {row['id']})", axis=1).tolist()
+            client_choice = st.selectbox("Choisir un client", client_dict)
+            client_id = int(client_choice.split("ID: ")[1].replace(")", ""))
+            
+            df_detail = pd.read_sql_query(f"SELECT * FROM clients WHERE id={client_id}", conn)
+            client_data = df_detail.iloc[0]
+            
+            st.write(f"### Historique de {client_data['nom']} {client_data['prenom']}")
+            df_vehicules_client = pd.read_sql_query(f"SELECT immatriculation, marque, modele FROM vehicules WHERE client_id={client_id}", conn)
+            if not df_vehicules_client.empty:
+                st.dataframe(df_vehicules_client, use_container_width=True)
+            else:
+                st.warning("Ce client n'a pas de véhicule enregistré.")
+                
+            with st.expander("Modifier ou Supprimer ce client"):
+                with st.form("modif_client"):
+                    m_nom = st.text_input("Nom", value=client_data['nom'])
+                    m_prenom = st.text_input("Prénom", value=client_data['prenom'])
+                    m_tel = st.text_input("Téléphone", value=client_data['telephone'])
+                    
+                    save = st.form_submit_button("Sauvegarder modifications")
+                    if save:
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE clients SET nom=?, prenom=?, telephone=? WHERE id=?",
+                                       (m_nom, m_prenom, m_tel, client_id))
+                        conn.commit()
+                        st.success("Client modifié !")
+                        st.rerun()
+                
+                if st.button("🗑️ Supprimer ce client"):
+                    cursor = conn.cursor()
+                    cursor.execute(f"DELETE FROM clients WHERE id={client_id}")
+                    conn.commit()
+                    st.warning("Client supprimé !")
+                    st.rerun()
+        else:
+            st.info("Veuillez ajouter des clients d'abord.")
+            
+    conn.close()
 
-# -------------------
-# Dashboard
-# -------------------
+# --- MODULE 3 : VÉHICULES ---
+def show_vehicules():
+    st.title("🚘 Gestion des Véhicules")
+    conn = get_connection()
+    
+    tab1, tab2 = st.tabs(["📋 Liste des Véhicules", "➕ Ajouter un Véhicule"])
+    
+    with tab1:
+        df = pd.read_sql_query("""
+            SELECT v.immatriculation, v.marque, v.modele, v.annee, v.couleur, 
+                   c.nom || ' ' || c.prenom as 'Propriétaire'
+            FROM vehicules v 
+            JOIN clients c ON v.client_id = c.id
+            ORDER BY v.immatriculation
+        """, conn)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun véhicule enregistré.")
 
-if menu == "Tableau de bord":
+    with tab2:
+        df_clients = pd.read_sql_query("SELECT id, nom, prenom FROM clients", conn)
+        if df_clients.empty:
+            st.error("Vous devez ajouter un client avant d'ajouter un véhicule !")
+        else:
+            client_dict = df_clients.apply(lambda row: f"{row['nom']} {row['prenom']} (ID: {row['id']})", axis=1).tolist()
+            client_choice = st.selectbox("Propriétaire du véhicule", client_dict)
+            client_id = int(client_choice.split("ID: ")[1].replace(")", ""))
+            
+            with st.form("ajout_vehicule"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    immat = st.text_input("Immatriculation *")
+                    vin = st.text_input("VIN (Numéro de châssis)")
+                    marque = st.text_input("Marque *")
+                    modele = st.text_input("Modèle *")
+                with col2:
+                    annee = st.number_input("Année", min_value=1900, max_value=2025, value=2020)
+                    couleur = st.text_input("Couleur")
+                    kilometrage = st.number_input("Kilométrage", min_value=0)
+                    carburant = st.selectbox("Carburant", ["Diesel", "Essence", "Hybride", "Electrique", "GPL"])
+                
+                submitted = st.form_submit_button("Enregistrer le véhicule")
+                if submitted:
+                    if immat and marque and modele:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO vehicules (client_id, immatriculation, vin, marque, modele, annee, couleur, kilometrage, carburant)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (client_id, immat, vin, marque, modele, annee, couleur, kilometrage, carburant))
+                        conn.commit()
+                        st.success(f"Véhicule {immat} ajouté avec succès !")
+                    else:
+                        st.error("Immatriculation, Marque et Modèle sont obligatoires.")
+                        
+    conn.close()
 
-    nb_clients = cursor.execute(
-        "SELECT COUNT(*) FROM clients"
-    ).fetchone()[0]
+# --- MODULES EN ATTENTE (Placeholders) ---
+# Quand tu seras prêt, on remplira ces fonctions avec le code complet !
+def show_reception():
+    st.title("📥 Réception Véhicule")
+    st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 4 : Réception.")
 
-    nb_vehicules = cursor.execute(
-        "SELECT COUNT(*) FROM vehicules"
-    ).fetchone()[0]
+def show_sinistres():
+    st.title("🛡️ Sinistres Assurance")
+    st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 5 : Sinistres.")
 
-    nb_devis = cursor.execute(
-        "SELECT COUNT(*) FROM devis"
-    ).fetchone()[0]
+def show_devis():
+    st.title("📝 Devis")
+    st.info("🚧 Ce module est prêt à être développé ! Demande-moi de coder le Module 6 : Devis et PDF.")
 
-    c1, c2, c3 = st.columns(3)
+def show_ordres():
+    st.title("🔧 Ordres de Réparation")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    c1.metric("Clients", nb_clients)
-    c2.metric("Véhicules", nb_vehicules)
-    c3.metric("Devis", nb_devis)
+def show_atelier():
+    st.title("🏭 Suivi Atelier")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-# -------------------
-# Clients
-# -------------------
+def show_stock():
+    st.title("📦 Stock")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-elif menu == "Clients":
+def show_accessoires():
+    st.title("🔩 Accessoires")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    st.header("Gestion des clients")
+def show_fournisseurs():
+    st.title("🏭 Fournisseurs")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    nom = st.text_input("Nom")
-    telephone = st.text_input("Téléphone")
-    adresse = st.text_input("Adresse")
+def show_achats():
+    st.title("🛒 Achats")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    if st.button("Ajouter client"):
+def show_facturation():
+    st.title("🧾 Facturation")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-        cursor.execute(
-            """
-            INSERT INTO clients(nom,telephone,adresse)
-            VALUES(?,?,?)
-            """,
-            (nom, telephone, adresse)
-        )
+def show_caisse():
+    st.title("💰 Caisse")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-        conn.commit()
-        st.success("Client ajouté")
+def show_photos():
+    st.title("📸 Galerie Photos")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    df = pd.read_sql_query(
-        "SELECT * FROM clients",
-        conn
-    )
+def show_employes():
+    st.title("👷 Employés")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    st.dataframe(df)
+def show_documents():
+    st.title("📂 Documents")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-# -------------------
-# Véhicules
-# -------------------
+def show_statistiques():
+    st.title("📈 Statistiques")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-elif menu == "Véhicules":
+def show_qrcode():
+    st.title("📱 QR Code")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    st.header("Gestion des véhicules")
+def show_users():
+    st.title("🔐 Multi-Utilisateurs")
+    st.info("🚧 Ce module est prêt à être développé !")
 
-    client = st.text_input("Client")
 
-    immat = st.text_input("Immatriculation")
-    marque = st.text_input("Marque")
-    modele = st.text_input("Modèle")
-    couleur = st.text_input("Couleur")
+# ==========================================
+# EXÉCUTION PRINCIPALE
+# ==========================================
 
-    if st.button("Ajouter véhicule"):
-
-        cursor.execute(
-            """
-            INSERT INTO vehicules
-            (client,immatriculation,marque,modele,couleur)
-            VALUES(?,?,?,?,?)
-            """,
-            (
-                client,
-                immat,
-                marque,
-                modele,
-                couleur
-            )
-        )
-
-        conn.commit()
-
-        st.success("Véhicule ajouté")
-
-    df = pd.read_sql_query(
-        "SELECT * FROM vehicules",
-        conn
-    )
-
-    st.dataframe(df)
-
-# -------------------
-# Devis
-# -------------------
-
-elif menu == "Devis":
-
-    st.header("Création devis")
-
-    client = st.text_input("Client")
-
-    vehicule = st.text_input("Véhicule")
-
-    montant = st.number_input(
-        "Montant",
-        min_value=0.0
-    )
-
-    statut = st.selectbox(
-        "Statut",
-        [
-            "En attente",
-            "Accepté",
-            "Refusé"
-        ]
-    )
-
-    if st.button("Créer devis"):
-
-        cursor.execute(
-            """
-            INSERT INTO devis
-            (client,vehicule,montant,statut)
-            VALUES(?,?,?,?)
-            """,
-            (
-                client,
-                vehicule,
-                montant,
-                statut
-            )
-        )
-
-        conn.commit()
-
-        st.success("Devis créé")
-
-    df = pd.read_sql_query(
-        "SELECT * FROM devis",
-        conn
-    )
-
-    st.dataframe(df)
+# Appeler la fonction du module choisi
+if module_name == "dashboard":
+    show_dashboard()
+elif module_name == "clients":
+    show_clients()
+elif module_name == "vehicules":
+    show_vehicules()
+elif module_name == "reception":
+    show_reception()
+elif module_name == "sinistres":
+    show_sinistres()
+elif module_name == "devis":
+    show_devis()
+elif module_name == "ordres":
+    show_ordres()
+elif module_name == "atelier":
+    show_atelier()
+elif module_name == "stock":
+    show_stock()
+elif module_name == "accessoires":
+    show_accessoires()
+elif module_name == "fournisseurs":
+    show_fournisseurs()
+elif module_name == "achats":
+    show_achats()
+elif module_name == "facturation":
+    show_facturation()
+elif module_name == "caisse":
+    show_caisse()
+elif module_name == "photos":
+    show_photos()
+elif module_name == "employes":
+    show_employes()
+elif module_name == "documents":
+    show_documents()
+elif module_name == "statistiques":
+    show_statistiques()
+elif module_name == "qrcode":
+    show_qrcode()
+elif module_name == "users":
+    show_users()
