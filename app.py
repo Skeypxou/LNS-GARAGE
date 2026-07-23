@@ -189,9 +189,28 @@ def init_db():
 
     conn.commit()
     conn.close()
-
+def update_db_schema():
+    """Vérifie et ajoute les colonnes manquantes pour les nouveaux modules (Devis et OR)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # 1. Ajouter 'details_json' à la table devis (nécessaire pour le Module 6)
+    cursor.execute("PRAGMA table_info(devis)")
+    devis_columns = [col[1] for col in cursor.fetchall()]
+    if 'details_json' not in devis_columns:
+        cursor.execute("ALTER TABLE devis ADD COLUMN details_json TEXT")
+        
+    # 2. Ajouter 'vehicule_id' à la table ordres_reparation (nécessaire pour le Module 7)
+    cursor.execute("PRAGMA table_info(ordres_reparation)")
+    or_columns = [col[1] for col in cursor.fetchall()]
+    if 'vehicule_id' not in or_columns:
+        cursor.execute("ALTER TABLE ordres_reparation ADD COLUMN vehicule_id INTEGER")
+        
+    conn.commit()
+    conn.close()
 # Initialiser la DB au lancement
 init_db()
+update_db_schema()
 
 def get_connection():
     return sqlite3.connect(DB_PATH)
