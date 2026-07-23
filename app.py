@@ -205,7 +205,18 @@ def update_db_schema():
     or_columns = [col[1] for col in cursor.fetchall()]
     if 'vehicule_id' not in or_columns:
         cursor.execute("ALTER TABLE ordres_reparation ADD COLUMN vehicule_id INTEGER")
-        
+        # 3. Créer la table accessoires si elle n'existe pas
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS accessoires (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference TEXT,
+            designation TEXT,
+            prix_achat REAL,
+            prix_vente REAL,
+            quantite INTEGER,
+            seuil_alerte INTEGER DEFAULT 10
+        )
+    """
     conn.commit()
     conn.close()
 # Initialiser la DB au lancement
@@ -1302,9 +1313,134 @@ def show_stock():
 
     conn.close()
 
+# --- MODULE 10 : ACCESSOIRES ---
 def show_accessoires():
-    st.title("🔩 Accessoires")
-    st.info("🚧 Ce module est prêt à être développé !")
+    st.title("🔩 Catalogue & Gestion des Accessoires")
+    conn = get_connection()
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Catalogue & Marge", "➕ Ajouter un Accessoire", "🔄 Entrée / Sortie", "📊 Statistiques"])
+    
+    # --- TAB 1 : CATALOGUE ---
+    with tab1:
+        search_term = st.text_input("🔍 Rechercher un accessoire (nom ou référence)")
+        
+        if search_term:
+            query = f"SELECT * FROM accessoires WHERE designation LIKE '%{search_term}%' OR reference LIKE '%{search_term}%' ORDER BY designation"
+        else:
+            query = "SELECT * FROM accessoires ORDER BY designation"
+            
+        df = pd.read_sql_query(query, conn)
+        
+        if not df.empty:
+            # Calcul automatique de la Marge
+            df['Marge_€'] = df['prix_vente'] - df['prix_achat']
+            df['Marge_%'] = ((df['prix_vente'] - df['prix_achat']) / df['prix_achat']) * 100
+            df['Marge_%'] = df['Marge_%'].round(1)
+            
+            # Alerte visuelle stock
+            def check_stock_accessoire(row):
+                if row['quantite'] == 0: return "⚫ Rupture"
+                elif row['quantite'] <= row['seuil_alerte']: return "🔴 Bas"
+                else: return "🟢 OK"
+            df['Stock'] = df.apply(check_stock_accessoire, axis=1)
+            
+            # Affichage propre
+            df_display = df[['Stock', 'reference', 'designation', 'quantite', 'prix_achat', 'prix_vente', 'Marge_€', 'Marge_%']]
+            df_display.columns = ['Stock', 'Référence', 'Désignation', 'Qté', 'Prix Achat', 'Prix Vente', 'Marge (€)', 'Marge (%)']
+            
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("Catalogue vide. Ajoutez vos accessoires courants (clips, rivets, joints...) !")
+
+    # --- TAB 2 : AJOUTER ---
+    with tab2:
+        with st.form("add_accessoire"):
+            st.subheader("🆕 Nouvel Accessoire au Catalogue")
+            col1, col2 = st.columns(2)
+            with col1:
+                reference = st.text_input("Référence * (ex: CLP-UNIV)")
+                designation = st.text_input("Désignation / Nom * (ex: Clip universel pare-chocs)")
+                quantite = st.number_input("Quantité initiale *", min_value=0, step=1)
+            with col2:
+                prix_achat = st.number_input("Prix d'achat unitaire (€) *", min_value=0.0, format="%.2f")
+                prix_vente = st.number_input("Prix de vente unitaire (€) *", min_value=0.0, format="%.2f")
+                seuil_alerte = st.number_input("Seuil d'alerte stock", min_value=0, step=1, value=10)
+                
+            submitted = st.form_submit_button("Ajouter au Catalogue")
+            if submitted:
+                if designation and prix_achat > 0 and prix_vente > 0:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO accessoires (reference, designation, prix_achat, prix_vente, quantite, seuil_alerte)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (reference, designation, prix_achat, prix_vente, quantite, seuil_alerte))
+                    conn.commit()
+                    st.success(f"✅ Accessoire '{designation}' ajouté au catalogue !")
+                else:
+                    st.error("❌ La désignation et les prix sont obligatoires.")
+
+    # --- TAB 3 : ENTRÉE / SORTIE ---
+    with tab3:
+        df_existing = pd.read_sql_query("SELECT id, reference, designation, quantite FROM accessoires", conn)
+        if df_existing.empty:
+            st.warning("Aucun accessoire dans le catalogue pour effectuer un mouvement.")
+        else:
+            st.subheader("Mouvement de stock rapide")
+            art_dict = df_existing.apply(lambda row: f"{row['reference']} - {row['designation']} (Stock: {row['quantite']}) [ID:{row['id']}]", axis=1).tolist()
+            art_choice = st.selectbox("Choisir l'accessoire", art_dict)
+            art_id = int(art_choice.split("[ID:")[1].replace("]", ""))
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                qty_add = st.number_input("➕ Quantité ENTRÉE (Réappro)", min_value=0, step=1, key="acc_in")
+                if st.button("📥 Valider Entrée", key="btn_acc_in"):
+                    if qty_add > 0:
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE accessoires SET quantite = quantite + ? WHERE id = ?", (qty_add, art_id))
+                        conn.commit()
+                        st.success(f"✅ {qty_add} unité(s) ajoutées au stock !")
+                        st.rerun()
+                    else:
+                        st.warning("Entrez une quantité supérieure à 0.")
+                        
+            with col2:
+                qty_remove = st.number_input("➖ Quantité SORTIE (Conso)", min_value=0, step=1, key="acc_out")
+                if st.button("📤 Valider Sortie", key="btn_acc_out"):
+                    current_qty = df_existing[df_existing['id'] == art_id]['quantite'].values[0]
+                    if qty_remove > 0 and qty_remove <= current_qty:
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE accessoires SET quantite = quantite - ? WHERE id = ?", (qty_remove, art_id))
+                        conn.commit()
+                        st.success(f"✅ {qty_remove} unité(s) sorties du stock !")
+                        st.rerun()
+                    elif qty_remove > current_qty:
+                        st.error(f"❌ Stock insuffisant ! Il n'y a que {current_qty} unités.")
+                    else:
+                        st.warning("Entrez une quantité supérieure à 0.")
+
+    # --- TAB 4 : STATISTIQUES ---
+    with tab4:
+        df_stats = pd.read_sql_query("SELECT designation, quantite, prix_achat, prix_vente FROM accessoires", conn)
+        if not df_stats.empty:
+            st.subheader("💰 Top Marge : Les accessoires qui te rapportent le plus")
+            df_stats['Marge_€'] = df_stats['prix_vente'] - df_stats['prix_achat']
+            df_stats = df_stats.sort_values(by='Marge_€', ascending=False)
+            
+            fig_marge = px.bar(df_stats.head(10), x='designation', y='Marge_€', 
+                               title="Top 10 Accessoires par Marge Unitaire (€)",
+                               color='Marge_€', color_continuous_scale='Greens')
+            st.plotly_chart(fig_marge, use_container_width=True)
+            
+            st.subheader("⚠️ Accessoires à commander urgently (Stock Faible)")
+            df_alertes = pd.read_sql_query(f"SELECT reference, designation, quantite, seuil_alerte FROM accessoires WHERE quantite <= seuil_alerte", conn)
+            if not df_alertes.empty:
+                st.dataframe(df_alertes, use_container_width=True, hide_index=True)
+            else:
+                st.info("🎉 Tous les accessoires sont suffisamment stockés !")
+        else:
+            st.info("Aucune donnée statistique disponible.")
+
+    conn.close()
 
 def show_fournisseurs():
     st.title("🏭 Fournisseurs")
